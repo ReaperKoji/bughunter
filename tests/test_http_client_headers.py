@@ -33,7 +33,15 @@ class HttpClientHeadersTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_async_requests_inject_h1_identifier_and_standard_user_agent(self) -> None:
         fake_client = _FakeAsyncClient()
-        with patch.dict("os.environ", {"H1_API_IDENTIFIER": "reaperk0ji"}, clear=False), patch(
+        with patch.dict(
+            "os.environ",
+            {
+                "H1_API_IDENTIFIER": "reaperk0ji",
+                "HUNTEROPS_BUG_BOUNTY_USERNAME": "reaperk0ji",
+                "HUNTEROPS_TEST_ACCOUNT_EMAIL": "reaperk0ji+bb@example.com",
+            },
+            clear=False,
+        ), patch("hunterops.http_client.httpx", object()), patch(
             "hunterops.http_client.get_async_http_client",
             new=AsyncMock(return_value=fake_client),
         ):
@@ -43,6 +51,8 @@ class HttpClientHeadersTests(unittest.IsolatedAsyncioTestCase):
         sent = fake_client.calls[0]
         self.assertEqual(sent.get("X-H1-Client-Identifier"), "reaperk0ji")
         self.assertEqual(sent.get("User-Agent"), "Mozilla/5.0 (HunterOps/3.0; BugBounty; reaperk0ji).")
+        self.assertEqual(sent.get("X-Bug-Bounty"), "reaperk0ji")
+        self.assertEqual(sent.get("X-Test-Account-Email"), "reaperk0ji+bb@example.com")
         self.assertEqual(sent.get("X-Test"), "1")
 
 

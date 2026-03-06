@@ -1,1 +1,8 @@
-api.example.com
+api.robinhood.com
+cashier.robinhood.com
+status.bitstamp.net
+www.bitstamp.net
+www.tradepmr.com
+identi.robinhood.com
+minerva.robinhood.com
+nummus.robinhood.com

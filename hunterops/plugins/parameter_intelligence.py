@@ -102,11 +102,31 @@ class PluginImpl(Plugin):
         cfg = context["config"].get("modules", {}).get(self.name, {})
         timeout = int(context["runtime"]["timeout_seconds"])
         base = f"https://{task.target}"
-        seeds = cfg.get("seed_paths", ["/", "/search?q=test", "/api/users?id=1", "/api/orders?order_id=1001"])
         payload = task.payload if isinstance(task.payload, dict) else {}
+        default_seeds = cfg.get("seed_paths", ["/", "/search?q=test", "/api/users?id=1", "/api/orders?order_id=1001"])
+        payload_seeds = payload.get("seed_paths", []) if isinstance(payload.get("seed_paths"), list) else []
+        max_seed_paths = max(1, int(cfg.get("max_seed_paths", 12)))
+        seed_candidates = payload_seeds if payload_seeds else default_seeds
+        seeds: list[str] = []
+        seen_seeds: set[str] = set()
+        for raw_seed in seed_candidates if isinstance(seed_candidates, list) else []:
+            seed = str(raw_seed).strip()
+            if not seed:
+                continue
+            if not seed.startswith("http"):
+                seed = seed if seed.startswith("/") else f"/{seed}"
+            if seed in seen_seeds:
+                continue
+            seen_seeds.add(seed)
+            seeds.append(seed)
+            if len(seeds) >= max_seed_paths:
+                break
+        if not seeds:
+            seeds = ["/"]
         run_id = str(payload.get("run_id", ""))
         evidence_root = Path(str(cfg.get("evidence_dir", "data/evidence/engine")))
         max_safe_probes = int(cfg.get("max_safe_probes", 25))
+        max_script_fetch = max(0, int(cfg.get("max_script_fetch", 20)))
         request_delay = max(0.0, float(payload.get("request_delay_seconds", 0) or 0.0))
         user_agent = str(payload.get("user_agent", "")).strip()
         request_headers = {"User-Agent": user_agent} if user_agent else {}
@@ -161,7 +181,7 @@ class PluginImpl(Plugin):
                 except Exception:
                     pass
 
-        for jsu in sorted(script_urls)[:30]:
+        for jsu in sorted(script_urls)[:max_script_fetch]:
             if urlparse(jsu).netloc not in {"", task.target}:
                 continue
             jsr = await _fetch(jsu)
@@ -390,33 +410,36 @@ class PluginImpl(Plugin):
         dsn = os.getenv(dsn_env, "")
         if pg_enabled and dsn and run_id and db_rows:
             try:
-                storage = PostgresStorage(dsn=dsn, enabled=True)
-                storage.ensure_research_schema()
-                storage.upsert_endpoint_parameters(run_id=run_id, rows=db_rows)
-                if entity_rows:
-                    storage.upsert_discovered_entities(run_id=run_id, target=task.target, rows=entity_rows)
-                if object_rows:
-                    storage.upsert_objects(run_id=run_id, target=task.target, rows=object_rows)
-                    storage.upsert_attack_graph_edges(
-                        run_id=run_id,
-                        target=task.target,
-                        edges=[
-                            {
-                                "src_type": "endpoint",
-                                "src_key": str(item.get("source_endpoint", "/")),
-                                "dst_type": "object",
-                                "dst_key": str(item.get("object_key", "")),
-                                "edge_type": "parameter_object_signal",
-                                "confidence_score": float(item.get("confidence_score", 60) or 60),
-                                "evidence_ref": str((item.get("metadata", {}) or {}).get("evidence_ref", "")),
-                                "metadata": {"object_type": str(item.get("object_type", "")), "source_plugin": self.name},
-                            }
-                            for item in object_rows[:500]
-                            if str(item.get("object_key", "")).strip()
-                        ],
-                        discovery_source=self.name,
-                        confidence_score=75.0,
-                    )
+                def _persist_storage() -> None:
+                    storage = PostgresStorage(dsn=dsn, enabled=True)
+                    storage.ensure_research_schema()
+                    storage.upsert_endpoint_parameters(run_id=run_id, rows=db_rows)
+                    if entity_rows:
+                        storage.upsert_discovered_entities(run_id=run_id, target=task.target, rows=entity_rows)
+                    if object_rows:
+                        storage.upsert_objects(run_id=run_id, target=task.target, rows=object_rows)
+                        storage.upsert_attack_graph_edges(
+                            run_id=run_id,
+                            target=task.target,
+                            edges=[
+                                {
+                                    "src_type": "endpoint",
+                                    "src_key": str(item.get("source_endpoint", "/")),
+                                    "dst_type": "object",
+                                    "dst_key": str(item.get("object_key", "")),
+                                    "edge_type": "parameter_object_signal",
+                                    "confidence_score": float(item.get("confidence_score", 60) or 60),
+                                    "evidence_ref": str((item.get("metadata", {}) or {}).get("evidence_ref", "")),
+                                    "metadata": {"object_type": str(item.get("object_type", "")), "source_plugin": self.name},
+                                }
+                                for item in object_rows[:500]
+                                if str(item.get("object_key", "")).strip()
+                            ],
+                            discovery_source=self.name,
+                            confidence_score=75.0,
+                        )
+
+                await asyncio.to_thread(_persist_storage)
             except Exception:
                 pass
 

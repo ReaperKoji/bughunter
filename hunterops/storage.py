@@ -93,7 +93,31 @@ class PostgresStorage:
             import psycopg  # type: ignore
         except Exception as err:
             raise RuntimeError("psycopg is required for postgres storage") from err
-        self._conn = psycopg.connect(self.dsn, connect_timeout=5)
+        try:
+            connect_timeout = max(1, int(os.getenv("HUNTEROPS_PG_CONNECT_TIMEOUT_SECONDS", "5") or 5))
+        except Exception:
+            connect_timeout = 5
+        try:
+            statement_timeout_ms = max(1000, int(os.getenv("HUNTEROPS_PG_STATEMENT_TIMEOUT_MS", "12000") or 12000))
+        except Exception:
+            statement_timeout_ms = 12000
+        try:
+            lock_timeout_ms = max(500, int(os.getenv("HUNTEROPS_PG_LOCK_TIMEOUT_MS", "3000") or 3000))
+        except Exception:
+            lock_timeout_ms = 3000
+        try:
+            idle_tx_timeout_ms = max(
+                1000,
+                int(os.getenv("HUNTEROPS_PG_IDLE_IN_TX_TIMEOUT_MS", "20000") or 20000),
+            )
+        except Exception:
+            idle_tx_timeout_ms = 20000
+        options = (
+            f"-c statement_timeout={statement_timeout_ms} "
+            f"-c lock_timeout={lock_timeout_ms} "
+            f"-c idle_in_transaction_session_timeout={idle_tx_timeout_ms}"
+        )
+        self._conn = psycopg.connect(self.dsn, connect_timeout=connect_timeout, options=options)
         with self._conn.cursor() as cur:
             cur.execute(
                 """

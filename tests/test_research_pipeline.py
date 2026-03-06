@@ -228,7 +228,7 @@ class ResearchPipelineTests(unittest.TestCase):
         )
         self.assertEqual(fake.calls, 1)
 
-    def test_alert_router_hook_dispatches_correlation_and_high_findings(self) -> None:
+    def test_alert_router_hook_dispatches_only_actionable_findings_by_default(self) -> None:
         mod = load_module()
 
         class _FakeAlertRouter:
@@ -280,7 +280,8 @@ class ResearchPipelineTests(unittest.TestCase):
                 source="unit",
             )
         )
-        self.assertEqual(len(fake_router.calls), 2)
+        self.assertEqual(len(fake_router.calls), 1)
+        self.assertTrue(fake_router.calls[0].startswith("business_logic_sniper:r1:unit"))
 
     def test_alert_dry_run_sends_critical_and_research_signals(self) -> None:
         mod = load_module()
@@ -319,6 +320,34 @@ class ResearchPipelineTests(unittest.TestCase):
             self.assertTrue(any("Test Research Log" in item for item in router.calls))
             self.assertEqual(router.logs, 1)
             self.assertTrue((Path(tmp) / "alert_dry_run" / "dry_run_poc_run-dry.md").exists())
+
+    def test_split_findings_for_triage_separates_actionable_and_review(self) -> None:
+        mod = load_module()
+        findings = [
+            mod.Finding(
+                plugin="differential_auth_prover",
+                target="api.example.com",
+                category="critical_idor_vulnerability",
+                severity="critical",
+                title="idor",
+                evidence={"endpoint": "/api/users/2"},
+                metadata={"confidence_score": 92.0, "impact": 95.0},
+            ),
+            mod.Finding(
+                plugin="vulnerability_correlation_engine",
+                target="api.example.com",
+                category="vulnerability_correlation",
+                severity="medium",
+                title="corr",
+                evidence={"endpoint": "/unknown"},
+                metadata={"confidence_score": 60.0, "impact": 60.0},
+            ),
+        ]
+        actionable, review = mod.split_findings_for_triage(findings, triage_cfg={"allow_correlation_submission": False})
+        self.assertEqual(len(actionable), 1)
+        self.assertEqual(len(review), 1)
+        self.assertEqual(actionable[0].plugin, "differential_auth_prover")
+        self.assertEqual(review[0].plugin, "vulnerability_correlation_engine")
 
 
 if __name__ == "__main__":

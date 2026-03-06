@@ -1,10 +1,10 @@
-version: "3.9"
-
 services:
   db:
     image: postgres:15-alpine
     container_name: hunterops-db
     restart: always
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-hunter}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hunter}
@@ -18,15 +18,11 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     mem_limit: ${DB_MEM_LIMIT:-1g}
-    mem_reservation: ${DB_MEM_RESERVATION:-512m}
-    cpus: "${DB_CPUS:-1.0}"
     deploy:
       resources:
         limits:
           cpus: "${DB_CPUS:-1.0}"
           memory: ${DB_MEM_LIMIT:-1g}
-        reservations:
-          memory: ${DB_MEM_RESERVATION:-512m}
     networks:
       - hunterops-internal
 
@@ -44,15 +40,11 @@ services:
     volumes:
       - redis-data:/data
     mem_limit: ${REDIS_MEM_LIMIT:-256m}
-    mem_reservation: ${REDIS_MEM_RESERVATION:-128m}
-    cpus: "${REDIS_CPUS:-0.5}"
     deploy:
       resources:
         limits:
           cpus: "${REDIS_CPUS:-0.5}"
           memory: ${REDIS_MEM_LIMIT:-256m}
-        reservations:
-          memory: ${REDIS_MEM_RESERVATION:-128m}
     networks:
       - hunterops-internal
 
@@ -62,61 +54,44 @@ services:
       dockerfile: Dockerfile
     container_name: hunterops-app
     restart: always
-    init: true
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Aqui é onde a mágica acontece: o env_file carrega tudo
     env_file:
       - .env
     environment:
+      # Mantemos apenas o que é fixo da infraestrutura Docker
       HUNTEROPS_HOME: /opt/hunterops
-      HUNTEROPS_POSTGRES_DSN: ${HUNTEROPS_POSTGRES_DSN:-postgresql://hunter:hunter@db:5432/hunterops}
-      HUNTEROPS_REDIS_URL: ${HUNTEROPS_REDIS_URL:-redis://redis:6379/0}
       POSTGRES_HOST: db
-      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
-      POSTGRES_USER: ${POSTGRES_USER:-hunter}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hunter}
-      POSTGRES_DB: ${POSTGRES_DB:-hunterops}
-      RUN_INTERVAL_SECONDS: ${RUN_INTERVAL_SECONDS:-300}
-      HACKERONE_API_USER: ${HACKERONE_API_USER:-}
-      HACKERONE_API_TOKEN: ${HACKERONE_API_TOKEN:-}
-      HUNTEROPS_OOB_CALLBACK_DOMAIN: ${HUNTEROPS_OOB_CALLBACK_DOMAIN:-}
-      HUNTEROPS_OOB_POLL_URL: ${HUNTEROPS_OOB_POLL_URL:-}
-      HUNTEROPS_OOB_API_TOKEN: ${HUNTEROPS_OOB_API_TOKEN:-}
-      HUNTEROPS_CRITICAL_WEBHOOK: ${HUNTEROPS_CRITICAL_WEBHOOK:-}
-      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      POSTGRES_PORT: 5432
+      # As URLs de Webhook e chaves de API agora virão 100% do seu .env automaticamente
     volumes:
       - ./config:/opt/hunterops/config:ro
       - ./templates:/opt/hunterops/templates:ro
       - ./wordlists:/opt/hunterops/wordlists:ro
       - hunterops-data:/opt/hunterops/data
+      - ./data/targets:/opt/hunterops/data/targets:rw
       - hunterops-reports:/opt/hunterops/reports
     command:
       [
         "bash",
         "-lc",
-        "while true; do python scripts/research_pipeline.py --config config/engine.yaml --out-dir /opt/hunterops/reports/research; sleep ${RUN_INTERVAL_SECONDS:-300}; done"
+        "while true; do python scripts/research_pipeline.py --config config/engine.yaml --targets-file $${TARGETS_FILE:-data/targets/in_scope_hosts.txt} --out-dir /opt/hunterops/reports/research; sleep $${RUN_INTERVAL_SECONDS:-300}; done"
       ]
     healthcheck:
       test: ["CMD-SHELL", "python scripts/monitor_status.py --health-check --quiet"]
       interval: 60s
       timeout: 12s
       retries: 3
-      start_period: 60s
     mem_limit: ${APP_MEM_LIMIT:-2g}
-    mem_reservation: ${APP_MEM_RESERVATION:-1g}
-    cpus: "${APP_CPUS:-1.5}"
     deploy:
       resources:
         limits:
           cpus: "${APP_CPUS:-1.5}"
           memory: ${APP_MEM_LIMIT:-2g}
-        reservations:
-          memory: ${APP_MEM_RESERVATION:-1g}
     networks:
       - hunterops-internal
       - hunterops-egress
@@ -136,54 +111,20 @@ services:
       - .env
     environment:
       HUNTEROPS_HOME: /opt/hunterops
-      HUNTEROPS_POSTGRES_DSN: ${HUNTEROPS_POSTGRES_DSN:-postgresql://hunter:hunter@db:5432/hunterops}
-      HUNTEROPS_REDIS_URL: ${HUNTEROPS_REDIS_URL:-redis://redis:6379/0}
       POSTGRES_HOST: db
-      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
-      POSTGRES_USER: ${POSTGRES_USER:-hunter}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hunter}
-      POSTGRES_DB: ${POSTGRES_DB:-hunterops}
-      MONITOR_INTERVAL_HOURS: ${MONITOR_INTERVAL_HOURS:-6}
-      MONITOR_DISCORD_WEBHOOK: ${MONITOR_DISCORD_WEBHOOK:-}
-      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     volumes:
       - hunterops-data:/opt/hunterops/data
+      - ./data/targets:/opt/hunterops/data/targets:rw
       - hunterops-reports:/opt/hunterops/reports
     command: ["python", "scripts/monitor_status.py", "--interval-hours", "${MONITOR_INTERVAL_HOURS:-6}"]
-    healthcheck:
-      test: ["CMD-SHELL", "python scripts/monitor_status.py --health-check --quiet"]
-      interval: 60s
-      timeout: 12s
-      retries: 3
-      start_period: 30s
     mem_limit: ${MONITOR_MEM_LIMIT:-256m}
-    mem_reservation: ${MONITOR_MEM_RESERVATION:-128m}
-    cpus: "${MONITOR_CPUS:-0.5}"
     deploy:
       resources:
         limits:
           cpus: "${MONITOR_CPUS:-0.5}"
           memory: ${MONITOR_MEM_LIMIT:-256m}
-        reservations:
-          memory: ${MONITOR_MEM_RESERVATION:-128m}
     networks:
       - hunterops-internal
-      - hunterops-egress
-
-  oob:
-    image: projectdiscovery/interactsh-server:latest
-    container_name: hunterops-oob
-    restart: always
-    profiles: ["oob"]
-    ports:
-      - "80:80"
-      - "443:443"
-      - "53:53/udp"
-    mem_limit: ${OOB_MEM_LIMIT:-512m}
-    cpus: "${OOB_CPUS:-0.5}"
-    networks:
       - hunterops-egress
 
 volumes:

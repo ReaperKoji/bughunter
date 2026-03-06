@@ -1,11 +1,13 @@
 # syntax=docker/dockerfile:1.7
 
+# --- ESTÁGIO 1: Ferramentas em GO ---
 FROM golang:1.24-bookworm AS go-tools
 
 ENV GOBIN=/opt/hunterops-bin
 
+# IMPORTANTE: libpcap-dev aqui para o Naabu compilar
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git \
+    && apt-get install -y --no-install-recommends ca-certificates git libpcap-dev \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p "${GOBIN}"
 
@@ -27,16 +29,19 @@ RUN set -eux; \
       if [ -f "/go/bin/${tool}" ]; then install -m 0755 "/go/bin/${tool}" "${GOBIN}/${tool}"; fi; \
     done
 
+# --- ESTÁGIO 2: Ferramentas em RUST ---
 FROM rust:1.86-slim-bookworm AS rust-tools
 
 RUN mkdir -p /opt/hunterops-bin
 WORKDIR /build
+# Certifique-se que esta pasta existe no seu repo antes do build
 COPY tools/rust-analyzer ./tools/rust-analyzer
 RUN set -eux; \
     cd tools/rust-analyzer; \
     cargo build --release; \
     install -m 0755 target/release/hunterops_rust_analyzer /opt/hunterops-bin/hunterops_rust_analyzer
 
+# --- ESTÁGIO 3: RUNTIME FINAL ---
 FROM python:3.11-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -48,30 +53,42 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /opt/hunterops
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl bash libpq5 tini gosu \
+# Precisamos de libpcap no runtime também para as ferramentas funcionarem, e tini para o entrypoint
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    git \
+    libpcap-dev \
+    procps \
+    tini \
     && rm -rf /var/lib/apt/lists/*
 
+# Copia e instala requirements primeiro para aproveitar cache do Docker
 COPY requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip \
     && python -m pip install --cache-dir "${PIP_CACHE_DIR}" -r requirements.txt
 
+# Copia binários compilados dos estágios anteriores
 COPY --from=go-tools /opt/hunterops-bin/ /usr/local/bin/
 COPY --from=rust-tools /opt/hunterops-bin/ /usr/local/bin/
+
+# Ajusta permissões dos binários
 RUN set -eux; \
     for tool in subfinder httpx naabu nuclei interactsh-client amass hunterops_rust_analyzer gau assetfinder waybackurls ffuf katana hakrawler gospider; do \
       if command -v "${tool}" >/dev/null 2>&1; then chmod 0755 "$(command -v "${tool}")"; fi; \
     done
 
+# Copia o resto do código
 COPY . /opt/hunterops
 COPY scripts/docker_entrypoint.sh /usr/local/bin/docker_entrypoint.sh
+
+# Setup de usuário e pastas de dados
 RUN chmod 0755 /usr/local/bin/docker_entrypoint.sh \
     && groupadd --system hunterops \
     && useradd --system --gid hunterops --home /opt/hunterops --shell /usr/sbin/nologin hunterops \
     && mkdir -p /opt/hunterops/data /opt/hunterops/reports /opt/hunterops/data/evidence \
-    && chmod 0755 /opt/hunterops/data /opt/hunterops/reports \
     && chown -R hunterops:hunterops /opt/hunterops
 
+# Variáveis de ambiente padrão (vazias)
 ENV HACKERONE_API_USER="" \
     HACKERONE_API_TOKEN="" \
     HUNTEROPS_OOB_CALLBACK_DOMAIN="" \
@@ -80,5 +97,6 @@ ENV HACKERONE_API_USER="" \
     HUNTEROPS_CRITICAL_WEBHOOK="" \
     HUNTEROPS_POSTGRES_DSN=""
 
+# Usa Tini para gerenciar processos corretamente no container
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/docker_entrypoint.sh"]
-CMD ["python", "scripts/research_pipeline.py", "--config", "config/engine.yaml"]
+CMD ["python", "scripts/research_pipeline.py", "--config", "config/engine.yaml", "--targets-file", "config/targets/robinhood_in_scope_hosts.txt"]

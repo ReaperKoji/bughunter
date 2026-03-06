@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
+import logging
 import os
 import re
 import sys
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,6 +52,7 @@ EMAIL_RE = re.compile(r"""[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}""")
 UUID_RE = re.compile(r"""\b[0-9a-fA-F]{8}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{12}\b""")
 NUMERIC_ID_RE = re.compile(r"""\b[1-9][0-9]{2,18}\b""")
 SENSITIVE_PRIORITY_KEYWORDS = ("admin", "internal", "v1/debug", "config", "staging", "export", "graphiql")
+DEFAULT_PIPELINE_LOG = "data/pipeline.log"
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,6 +70,297 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
+
+
+def _force_stdio_unbuffered() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None:
+            continue
+        try:
+            stream.reconfigure(line_buffering=True, write_through=True)
+        except Exception:
+            with contextlib.suppress(Exception):
+                stream.flush()
+
+
+def _stderr_echo(message: str) -> None:
+    ts = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    line = f"[{ts}] {message}"
+    try:
+        print(line, file=sys.stderr, flush=True)
+    except Exception:
+        return
+
+
+def _build_fallback_logger(log_file: Path, *, verbose: bool) -> logging.Logger:
+    logger = logging.getLogger("hunterops")
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+    logger.propagate = False
+    logger.handlers.clear()
+
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    console = logging.StreamHandler(stream=sys.stderr)
+    console.setLevel(logging.DEBUG if verbose else logging.INFO)
+    console.setFormatter(formatter)
+    logger.addHandler(console)
+
+    try:
+        ensure_directory(log_file.parent, mode=0o755)
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except Exception:
+        _stderr_echo(f"fallback_logger_file_attach_failed path={log_file}")
+    return logger
+
+
+def _init_bootstrap_logger(log_file: Path, *, verbose: bool) -> logging.Logger:
+    try:
+        ensure_directory(log_file.parent, mode=0o755)
+        return setup_logging(log_file, verbose=verbose)
+    except Exception as err:
+        _stderr_echo(f"logger_init_failed path={log_file} err={type(err).__name__}: {err}")
+        return _build_fallback_logger(log_file, verbose=verbose)
+
+
+def _attach_json_file_handler(logger: Any, log_file: Path) -> None:
+    if not isinstance(logger, logging.Logger):
+        return
+    ensure_directory(log_file.parent, mode=0o755)
+    target = log_file.resolve()
+    for handler in logger.handlers:
+        if isinstance(handler, logging.FileHandler):
+            base = Path(getattr(handler, "baseFilename", "")).resolve()
+            if base == target:
+                return
+
+    formatter: logging.Formatter | None = None
+    for handler in logger.handlers:
+        if isinstance(handler, logging.FileHandler) and handler.formatter is not None:
+            formatter = handler.formatter
+            break
+    if formatter is None:
+        for handler in logger.handlers:
+            if handler.formatter is not None:
+                formatter = handler.formatter
+                break
+    if formatter is None:
+        formatter = logging.Formatter("%(message)s")
+
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+
+def _assert_writable_directory(path: Path, *, label: str) -> Path:
+    if path.exists() and not path.is_dir():
+        raise NotADirectoryError(f"{label} is not a directory: {path}")
+    ensure_directory(path, mode=0o755)
+    probe = path / f".hunterops_write_probe_{os.getpid()}_{int(time.time() * 1000)}"
+    try:
+        probe.write_text("ok\n", encoding="utf-8")
+    except Exception as err:
+        raise PermissionError(f"{label} is not writable: {path} ({type(err).__name__}: {err})") from err
+    finally:
+        with contextlib.suppress(Exception):
+            probe.unlink(missing_ok=True)
+    return path
+
+
+def _cfg_get(cfg: dict[str, Any], dotted_path: str) -> tuple[Any, bool]:
+    node: Any = cfg
+    for part in dotted_path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None, False
+        node = node[part]
+    return node, True
+
+
+def _validate_config_structure(cfg: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    required: list[tuple[str, type[Any]]] = [
+        ("runtime", dict),
+        ("modules", dict),
+        ("storage", dict),
+        ("storage.postgres", dict),
+        ("storage.postgres.enabled", bool),
+        ("storage.postgres.dsn_env", str),
+        ("storage.postgres.required", bool),
+        ("storage.redis", dict),
+        ("storage.redis.enabled", bool),
+        ("storage.redis.required", bool),
+    ]
+    for dotted_path, expected_type in required:
+        value, found = _cfg_get(cfg, dotted_path)
+        if not found:
+            errors.append(f"missing_config_key path={dotted_path}")
+            continue
+        if not isinstance(value, expected_type):
+            errors.append(
+                f"invalid_config_type path={dotted_path} expected={expected_type.__name__} got={type(value).__name__}"
+            )
+            continue
+        if expected_type is str and not str(value).strip():
+            errors.append(f"empty_config_value path={dotted_path}")
+
+    modules, modules_found = _cfg_get(cfg, "modules")
+    if modules_found and isinstance(modules, dict):
+        h1_manager = modules.get("hackerone_manager", {})
+        if isinstance(h1_manager, dict) and bool(h1_manager.get("enabled", False)):
+            for key in ("api_user_env", "api_token_env"):
+                raw = str(h1_manager.get(key, "")).strip()
+                if not raw:
+                    errors.append(f"missing_config_key path=modules.hackerone_manager.{key}")
+
+        report_engine = modules.get("report_engine", {})
+        if isinstance(report_engine, dict) and bool(report_engine.get("auto_submit_h1_draft", False)):
+            for key in ("identifier_env", "token_env"):
+                raw = str(report_engine.get(key, "")).strip()
+                if not raw:
+                    errors.append(f"missing_config_key path=modules.report_engine.{key}")
+
+    return errors
+
+
+def _validate_config_env(cfg: dict[str, Any]) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    pg_cfg = cfg.get("storage", {}).get("postgres", {}) if isinstance(cfg.get("storage"), dict) else {}
+    pg_enabled = bool(pg_cfg.get("enabled", False))
+    pg_required = bool(pg_cfg.get("required", True))
+    dsn_env = str(pg_cfg.get("dsn_env", "HUNTEROPS_POSTGRES_DSN")).strip()
+    dsn_value = str(os.getenv(dsn_env, "")).strip() if dsn_env else ""
+    if pg_enabled and pg_required and not dsn_value:
+        errors.append(f"missing_required_env env={dsn_env} reason=postgres_enabled")
+    elif pg_enabled and not dsn_value:
+        warnings.append(f"missing_optional_env env={dsn_env} reason=postgres_enabled_but_optional")
+
+    modules = cfg.get("modules", {}) if isinstance(cfg.get("modules"), dict) else {}
+    h1_sync_cfg = modules.get("hackerone_sync_engine", {})
+    if isinstance(h1_sync_cfg, dict) and bool(h1_sync_cfg.get("enabled", False)):
+        for env_name in ("H1_API_IDENTIFIER", "H1_API_TOKEN"):
+            if not str(os.getenv(env_name, "")).strip():
+                errors.append(f"missing_required_env env={env_name} reason=hackerone_sync_engine_enabled")
+
+    h1_manager_cfg = modules.get("hackerone_manager", {})
+    if isinstance(h1_manager_cfg, dict) and bool(h1_manager_cfg.get("enabled", False)):
+        user_env = str(h1_manager_cfg.get("api_user_env", "HACKERONE_API_USER")).strip()
+        token_env = str(h1_manager_cfg.get("api_token_env", "HACKERONE_API_TOKEN")).strip()
+        if user_env and not str(os.getenv(user_env, "")).strip():
+            errors.append(f"missing_required_env env={user_env} reason=hackerone_manager_enabled")
+        if token_env and not str(os.getenv(token_env, "")).strip():
+            errors.append(f"missing_required_env env={token_env} reason=hackerone_manager_enabled")
+        handles = h1_manager_cfg.get("program_handles", [])
+        has_handles = isinstance(handles, list) and any(str(item).strip() for item in handles)
+        has_single = bool(str(os.getenv("HACKERONE_PROGRAM_HANDLE", "")).strip())
+        if not has_handles and not has_single:
+            errors.append("missing_required_value path=modules.hackerone_manager.program_handles_or_env:HACKERONE_PROGRAM_HANDLE")
+
+    report_engine_cfg = modules.get("report_engine", {})
+    if isinstance(report_engine_cfg, dict) and bool(report_engine_cfg.get("auto_submit_h1_draft", False)):
+        id_env = str(report_engine_cfg.get("identifier_env", "H1_API_IDENTIFIER")).strip()
+        token_env = str(report_engine_cfg.get("token_env", "H1_API_TOKEN")).strip()
+        if id_env and not str(os.getenv(id_env, "")).strip():
+            errors.append(f"missing_required_env env={id_env} reason=report_engine_auto_submit_enabled")
+        if token_env and not str(os.getenv(token_env, "")).strip():
+            errors.append(f"missing_required_env env={token_env} reason=report_engine_auto_submit_enabled")
+
+    oob_cfg = modules.get("oob_engine", {})
+    if isinstance(oob_cfg, dict) and bool(oob_cfg.get("enabled", False)):
+        callback_env = str(oob_cfg.get("callback_domain_env", "HUNTEROPS_OOB_CALLBACK_DOMAIN")).strip()
+        poll_env = str(oob_cfg.get("poll_url_env", "HUNTEROPS_OOB_POLL_URL")).strip()
+        callback = str(os.getenv(callback_env, str(oob_cfg.get("callback_domain", "")))).strip()
+        poll_url = str(os.getenv(poll_env, str(oob_cfg.get("poll_url", "")))).strip()
+        if not callback:
+            errors.append(f"missing_required_value path=modules.oob_engine.callback_domain_or_env:{callback_env}")
+        if not poll_url:
+            errors.append(f"missing_required_value path=modules.oob_engine.poll_url_or_env:{poll_env}")
+
+    bug_bounty_username = str(
+        os.getenv("HUNTEROPS_BUG_BOUNTY_USERNAME", os.getenv("BUG_BOUNTY_USERNAME", os.getenv("H1_API_IDENTIFIER", "")))
+    ).strip()
+    test_account_email = str(
+        os.getenv("HUNTEROPS_TEST_ACCOUNT_EMAIL", os.getenv("BUG_BOUNTY_TEST_ACCOUNT_EMAIL", ""))
+    ).strip()
+    if not bug_bounty_username:
+        warnings.append("missing_recommended_env env=HUNTEROPS_BUG_BOUNTY_USERNAME reason=program_submission_header")
+    if not test_account_email:
+        warnings.append("missing_recommended_env env=HUNTEROPS_TEST_ACCOUNT_EMAIL reason=program_submission_header")
+
+    return errors, warnings
+
+
+def _resolve_redis_target(redis_cfg: dict[str, Any]) -> tuple[str, int, float]:
+    timeout = float(redis_cfg.get("connect_timeout_seconds", 2.0) or 2.0)
+    url_env = str(redis_cfg.get("url_env", "HUNTEROPS_REDIS_URL")).strip()
+    redis_url = str(os.getenv(url_env, "")).strip() if url_env else ""
+    if redis_url:
+        parsed = urlparse(redis_url)
+        host = str(parsed.hostname or "").strip()
+        if not host:
+            raise RuntimeError(f"invalid_redis_url env={url_env} value={redis_url}")
+        return host, int(parsed.port or 6379), timeout
+
+    host_env = str(redis_cfg.get("host_env", "REDIS_HOST")).strip()
+    port_env = str(redis_cfg.get("port_env", "REDIS_PORT")).strip()
+    host = str(os.getenv(host_env, "")).strip() if host_env else ""
+    if not host:
+        host = str(redis_cfg.get("host", "redis")).strip() or "redis"
+    port_raw = str(os.getenv(port_env, "")).strip() if port_env else ""
+    if not port_raw:
+        port_raw = str(redis_cfg.get("port", 6379)).strip() or "6379"
+    try:
+        port = int(port_raw)
+    except Exception as err:
+        raise RuntimeError(f"invalid_redis_port source={port_env or 'storage.redis.port'} value={port_raw}") from err
+    return host, port, timeout
+
+
+async def _ping_redis(host: str, port: int, timeout: float) -> str:
+    reader: asyncio.StreamReader
+    writer: asyncio.StreamWriter
+    reader, writer = await asyncio.wait_for(asyncio.open_connection(host=host, port=port), timeout=timeout)
+    try:
+        writer.write(b"*1\r\n$4\r\nPING\r\n")
+        await writer.drain()
+        raw = await asyncio.wait_for(reader.readline(), timeout=timeout)
+        reply = raw.decode("utf-8", errors="ignore").strip()
+        if reply.startswith("+PONG") or reply.startswith("-NOAUTH"):
+            return reply or "PONG"
+        if reply.startswith("-"):
+            raise RuntimeError(reply)
+        return reply or "unknown_reply"
+    finally:
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+
+
+async def _validate_redis_connectivity(cfg: dict[str, Any], logger: Any) -> None:
+    storage_cfg = cfg.get("storage", {}) if isinstance(cfg.get("storage"), dict) else {}
+    redis_cfg = storage_cfg.get("redis", {}) if isinstance(storage_cfg.get("redis"), dict) else {}
+    enabled = bool(redis_cfg.get("enabled", False))
+    required = bool(redis_cfg.get("required", True))
+    if not enabled:
+        try:
+            logger.info("redis_startup_check skipped=disabled")
+        except Exception:
+            _stderr_echo("redis_startup_check skipped=disabled")
+        return
+
+    host, port, timeout = _resolve_redis_target(redis_cfg)
+    try:
+        reply = await _ping_redis(host=host, port=port, timeout=timeout)
+        logger.info(f"redis_startup_check_ok host={host} port={port} reply={reply}")
+    except Exception as err:
+        message = f"redis_connection_failed host={host} port={port} timeout={timeout} err={type(err).__name__}: {err}"
+        if required:
+            raise RuntimeError(message) from err
+        logger.warning(message)
 
 
 def collect_targets(args: argparse.Namespace) -> list[str]:
@@ -317,12 +612,108 @@ async def _run_report_engine_if_high_critical(
         return []
 
 
-def _should_alert_router_dispatch(finding: Finding) -> bool:
+SEVERITY_RANK: dict[str, int] = {
+    "info": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
+
+
+def _severity_rank(severity: str) -> int:
+    return int(SEVERITY_RANK.get(str(severity or "").strip().lower(), 0))
+
+
+def _finding_confidence_value(finding: Finding) -> float:
+    metadata = finding.metadata if isinstance(finding.metadata, dict) else {}
+    evidence = finding.evidence if isinstance(finding.evidence, dict) else {}
+    try:
+        return float(
+            metadata.get(
+                "confidence_score",
+                metadata.get(
+                    "confidence",
+                    evidence.get("confidence_score", evidence.get("confidence", 0.0)),
+                ),
+            )
+            or 0.0
+        )
+    except Exception:
+        return 0.0
+
+
+def _finding_impact_value(finding: Finding) -> float:
+    metadata = finding.metadata if isinstance(finding.metadata, dict) else {}
+    evidence = finding.evidence if isinstance(finding.evidence, dict) else {}
+    raw = metadata.get("impact", evidence.get("impact_score", evidence.get("impact", 0.0)))
+    try:
+        return float(raw or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _is_unknown_endpoint(endpoint: str) -> bool:
+    normalized = str(endpoint or "").strip().lower()
+    return normalized in {"unknown", "/unknown", ""}
+
+
+def _should_alert_router_dispatch(finding: Finding, triage_cfg: dict[str, Any] | None = None) -> bool:
+    cfg = triage_cfg if isinstance(triage_cfg, dict) else {}
+    min_severity = str(cfg.get("alert_min_severity", cfg.get("actionable_min_severity", "high"))).strip().lower() or "high"
+    min_confidence = float(cfg.get("alert_min_confidence", cfg.get("actionable_min_confidence", 80.0)) or 80.0)
+    require_known_endpoint = bool(cfg.get("alert_require_known_endpoint", True))
+    allow_correlation_alerts = bool(cfg.get("allow_correlation_alerts", False))
+    correlation_min_confidence = float(cfg.get("correlation_min_confidence", max(85.0, min_confidence)) or max(85.0, min_confidence))
+
+    if _severity_rank(finding.severity) < _severity_rank(min_severity):
+        return False
+
+    confidence = _finding_confidence_value(finding)
+    if confidence < min_confidence:
+        return False
+
+    endpoint = _finding_source_endpoint(finding)
+    if require_known_endpoint and _is_unknown_endpoint(endpoint):
+        return False
+
     if finding.plugin == "vulnerability_correlation_engine":
-        return True
-    if finding.plugin in {"business_logic_sniper", "race_condition_turbo"}:
-        return True
-    return str(finding.severity).strip().lower() in {"high", "critical"}
+        if not allow_correlation_alerts:
+            return False
+        if confidence < correlation_min_confidence:
+            return False
+
+    return True
+
+
+def split_findings_for_triage(
+    findings: list[Finding],
+    triage_cfg: dict[str, Any] | None = None,
+) -> tuple[list[Finding], list[Finding]]:
+    cfg = triage_cfg if isinstance(triage_cfg, dict) else {}
+    min_severity = str(cfg.get("actionable_min_severity", "high")).strip().lower() or "high"
+    min_confidence = float(cfg.get("actionable_min_confidence", 80.0) or 80.0)
+    min_impact = float(cfg.get("actionable_min_impact", 70.0) or 70.0)
+    require_known_endpoint = bool(cfg.get("actionable_require_known_endpoint", True))
+    allow_correlation_submission = bool(cfg.get("allow_correlation_submission", False))
+    actionable: list[Finding] = []
+    review_queue: list[Finding] = []
+
+    for finding in findings:
+        endpoint = _finding_source_endpoint(finding)
+        confidence = _finding_confidence_value(finding)
+        impact = _finding_impact_value(finding)
+        severity_ok = _severity_rank(finding.severity) >= _severity_rank(min_severity)
+        confidence_ok = confidence >= min_confidence
+        impact_ok = impact >= min_impact
+        endpoint_ok = (not require_known_endpoint) or (not _is_unknown_endpoint(endpoint))
+        correlation_ok = allow_correlation_submission or finding.plugin != "vulnerability_correlation_engine"
+
+        if severity_ok and confidence_ok and impact_ok and endpoint_ok and correlation_ok:
+            actionable.append(finding)
+        else:
+            review_queue.append(finding)
+    return actionable, review_queue
 
 
 async def _route_alerts_from_batch(
@@ -332,11 +723,12 @@ async def _route_alerts_from_batch(
     run_id: str,
     logger: Any,
     source: str,
+    triage_cfg: dict[str, Any] | None = None,
 ) -> None:
     if not alert_router.available or not batch:
         return
     for finding in batch:
-        if not _should_alert_router_dispatch(finding):
+        if not _should_alert_router_dispatch(finding, triage_cfg=triage_cfg):
             continue
         try:
             await alert_router.send_finding(finding, run_id=run_id, source=source)
@@ -800,8 +1192,16 @@ class ReactionLogic:
             return 100
         return 70
 
-    def tasks_from_saved_findings(self, findings: list[Finding], run_id: str, pack: dict[str, Any] | None) -> list[Task]:
+    def tasks_from_saved_findings(
+        self,
+        findings: list[Finding],
+        run_id: str,
+        pack: dict[str, Any] | None,
+        available_plugins: set[str] | None = None,
+    ) -> list[Task]:
         derived: list[Task] = []
+        enabled = available_plugins if isinstance(available_plugins, set) else set()
+        has_filter = bool(enabled)
         by_target: dict[str, set[str]] = {}
         for f in findings:
             if f.category != "js_discovery":
@@ -828,34 +1228,36 @@ class ReactionLogic:
         for target, eps in by_target.items():
             seed_paths = sorted(list(eps))[: self.max_seed_paths]
             prio = self._priority(seed_paths)
-            derived.append(
-                Task(
-                    plugin="parameter_intelligence",
-                    target=target,
-                    payload={
-                        "seed_paths": seed_paths,
-                        "trigger": "js_discovery",
-                        "run_id": run_id,
-                        "priority": prio,
-                        "priority_score": prio,
-                        "program_pack": pack or {},
-                    },
+            if (not has_filter) or ("parameter_intelligence" in enabled):
+                derived.append(
+                    Task(
+                        plugin="parameter_intelligence",
+                        target=target,
+                        payload={
+                            "seed_paths": seed_paths,
+                            "trigger": "js_discovery",
+                            "run_id": run_id,
+                            "priority": prio,
+                            "priority_score": prio,
+                            "program_pack": pack or {},
+                        },
+                    )
                 )
-            )
-            derived.append(
-                Task(
-                    plugin="differential_auth_prover",
-                    target=target,
-                    payload={
-                        "seed_paths": seed_paths,
-                        "trigger": "js_discovery",
-                        "run_id": run_id,
-                        "priority": prio,
-                        "priority_score": prio,
-                        "program_pack": pack or {},
-                    },
+            if (not has_filter) or ("differential_auth_prover" in enabled):
+                derived.append(
+                    Task(
+                        plugin="differential_auth_prover",
+                        target=target,
+                        payload={
+                            "seed_paths": seed_paths,
+                            "trigger": "js_discovery",
+                            "run_id": run_id,
+                            "priority": prio,
+                            "priority_score": prio,
+                            "program_pack": pack or {},
+                        },
+                    )
                 )
-            )
         return derived
 
 
@@ -1332,6 +1734,10 @@ class ResearchScheduler:
         self.feedback_max_retries = int(runtime.get("feedback_max_retries", 2))
         self._feedback_counts: dict[str, int] = {}
         self._feedback_streak: dict[str, int] = {}
+        self._feedback_events_total = 0
+        self._feedback_events_by_target: dict[str, int] = {}
+        self._task_timeouts_total = 0
+        self._task_timeouts_by_target: dict[str, int] = {}
         self.feedback_streak_threshold = int(runtime.get("feedback_streak_threshold", 3))
         self.feedback_hard_pause_seconds = float(runtime.get("feedback_hard_pause_seconds", 60.0))
         user_agents = runtime.get("user_agents", [])
@@ -1345,6 +1751,20 @@ class ResearchScheduler:
         self.proxies = [str(x).strip() for x in runtime.get("proxies", [])] if isinstance(runtime.get("proxies"), list) else []
         self._ua_idx: dict[str, int] = {}
         self._proxy_idx: dict[str, int] = {}
+        try:
+            base_timeout_seconds = float(runtime.get("timeout_seconds", 30) or 30)
+        except Exception:
+            base_timeout_seconds = 30.0
+        try:
+            configured_task_timeout = float(runtime.get("task_timeout_seconds", base_timeout_seconds * 4) or (base_timeout_seconds * 4))
+        except Exception:
+            configured_task_timeout = base_timeout_seconds * 4
+        try:
+            configured_heartbeat = float(runtime.get("batch_heartbeat_seconds", 15.0) or 15.0)
+        except Exception:
+            configured_heartbeat = 15.0
+        self.task_timeout_seconds = max(30.0, configured_task_timeout)
+        self.batch_heartbeat_seconds = max(5.0, configured_heartbeat)
 
     async def _wait_target_budget(self, target: str) -> None:
         rps = float(self.target_rps.get(target, 0) or 0)
@@ -1364,6 +1784,8 @@ class ResearchScheduler:
         if int(status_code) not in {403, 429}:
             self.clear_feedback(target)
             return
+        self._feedback_events_total += 1
+        self._feedback_events_by_target[target] = int(self._feedback_events_by_target.get(target, 0) or 0) + 1
         count = int(self._feedback_counts.get(target, 0) or 0) + 1
         self._feedback_counts[target] = count
         streak = int(self._feedback_streak.get(target, 0) or 0) + 1
@@ -1392,6 +1814,16 @@ class ResearchScheduler:
     def target_delay_remaining(self, target: str) -> float:
         now = time.monotonic()
         return max(0.0, float(self._target_penalty_until.get(target, now)) - now)
+
+    def timeout_count(self, target: str | None = None) -> int:
+        if target is None:
+            return int(self._task_timeouts_total)
+        return int(self._task_timeouts_by_target.get(target, 0) or 0)
+
+    def feedback_event_count(self, target: str | None = None) -> int:
+        if target is None:
+            return int(self._feedback_events_total)
+        return int(self._feedback_events_by_target.get(target, 0) or 0)
 
     def next_user_agent(self, target: str) -> str:
         if not self.user_agents:
@@ -1423,12 +1855,30 @@ class ResearchScheduler:
             async def invoke() -> list[Finding]:
                 return await plugin.run(filtered, self.context)
 
+            started_at = time.monotonic()
             try:
-                findings = await retry_async(invoke, retries=self.max_retries, base_delay=self.backoff)
+                findings = await asyncio.wait_for(
+                    retry_async(invoke, retries=self.max_retries, base_delay=self.backoff),
+                    timeout=self.task_timeout_seconds,
+                )
                 findings = plugin.normalize_findings(findings, filtered)
+            except asyncio.TimeoutError:
+                elapsed = round(time.monotonic() - started_at, 2)
+                self._task_timeouts_total += 1
+                self._task_timeouts_by_target[filtered.target] = int(self._task_timeouts_by_target.get(filtered.target, 0) or 0) + 1
+                self.logger.error(
+                    f"pipeline_task_timeout plugin={filtered.plugin} target={filtered.target} "
+                    f"timeout={self.task_timeout_seconds}s elapsed={elapsed}s"
+                )
+                return []
             except Exception as err:
                 self.logger.error(f"pipeline_task_failed plugin={filtered.plugin} target={filtered.target} err={err}")
                 return []
+            elapsed = round(time.monotonic() - started_at, 2)
+            if elapsed >= self.batch_heartbeat_seconds:
+                self.logger.info(
+                    f"pipeline_task_slow_complete plugin={filtered.plugin} target={filtered.target} elapsed={elapsed}s findings={len(findings)}"
+                )
             for ep in _task_endpoints(filtered):
                 self.state.mark_scanned(filtered.plugin, filtered.target, ep)
             return findings
@@ -1436,10 +1886,35 @@ class ResearchScheduler:
     async def run_batch(self, tasks: list[Task]) -> list[Finding]:
         if not tasks:
             return []
-        groups = await asyncio.gather(*(self.run_task(t) for t in tasks), return_exceptions=False)
         out: list[Finding] = []
-        for g in groups:
-            out.extend(g)
+        pending: dict[asyncio.Task[list[Finding]], Task] = {
+            asyncio.create_task(self.run_task(work_item)): work_item for work_item in tasks
+        }
+        batch_started = time.monotonic()
+        while pending:
+            done, _ = await asyncio.wait(
+                set(pending.keys()),
+                timeout=self.batch_heartbeat_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                elapsed = round(time.monotonic() - batch_started, 1)
+                sample = [f"{work.plugin}@{work.target}" for work in list(pending.values())[:3]]
+                sample_raw = ";".join(sample) if sample else "none"
+                self.logger.info(
+                    f"batch_heartbeat pending_tasks={len(pending)} elapsed={elapsed}s sample={sample_raw}"
+                )
+                continue
+            for completed in done:
+                work_item = pending.pop(completed, None)
+                if work_item is None:
+                    continue
+                try:
+                    out.extend(completed.result())
+                except Exception as err:
+                    self.logger.error(
+                        f"pipeline_batch_task_failed plugin={work_item.plugin} target={work_item.target} err={err}"
+                    )
         return out
 
 
@@ -1450,6 +1925,35 @@ def persist_outputs(out_dir: Path, target_label: str, rows: list[dict[str, Any]]
     export_html(out_dir / "findings.html", rows, target_label)
     export_dashboard(out_dir / "dashboard.html", rows)
     (out_dir / "findings.jsonl").write_text(to_jsonl(rows), encoding="utf-8")
+
+
+def persist_triage_outputs(
+    out_dir: Path,
+    *,
+    run_id: str,
+    actionable_rows: list[dict[str, Any]],
+    review_rows: list[dict[str, Any]],
+) -> None:
+    triage_dir = ensure_directory(out_dir / "triage", mode=0o755)
+    export_json(triage_dir / "actionable_findings.json", actionable_rows)
+    export_json(triage_dir / "review_queue.json", review_rows)
+    (triage_dir / "actionable_findings.jsonl").write_text(to_jsonl(actionable_rows), encoding="utf-8")
+    (triage_dir / "review_queue.jsonl").write_text(to_jsonl(review_rows), encoding="utf-8")
+    export_markdown(triage_dir / "actionable_findings.md", actionable_rows, f"{run_id}-actionable")
+    export_markdown(triage_dir / "review_queue.md", review_rows, f"{run_id}-review-queue")
+    (triage_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "actionable_count": len(actionable_rows),
+                "review_count": len(review_rows),
+            },
+            ensure_ascii=True,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def print_research_summary_table(rows: list[dict[str, Any]]) -> None:
@@ -1593,8 +2097,57 @@ def generate_auto_poc(out_dir: Path, findings: list[Finding], min_confidence: fl
 
 
 async def run_async(args: argparse.Namespace) -> int:
+    ts = args.run_id.strip() or datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    data_dir = _assert_writable_directory(resolve_path("data", prefer_existing=False), label="data directory")
+    out_dir = _assert_writable_directory(resolve_path(args.out_dir, prefer_existing=False), label="output directory")
+    pipeline_log_path = resolve_path(DEFAULT_PIPELINE_LOG, prefer_existing=False)
+    _assert_writable_directory(pipeline_log_path.parent, label="pipeline log directory")
+    logger = _init_bootstrap_logger(pipeline_log_path, verbose=args.verbose)
+    _attach_json_file_handler(logger, out_dir / f"research_{ts}.jsonl")
+
+    running_loop = asyncio.get_running_loop()
+    logger.info(
+        "bootstrap_started "
+        f"run_id={ts} "
+        f"config={resolve_path(args.config)} "
+        f"data_dir={data_dir} "
+        f"out_dir={out_dir} "
+        f"event_loop={type(running_loop).__name__} "
+        f"policy={type(asyncio.get_event_loop_policy()).__name__}"
+    )
+
     cfg = load_config(resolve_path(args.config))
+    structure_errors = _validate_config_structure(cfg)
+    if structure_errors:
+        raise RuntimeError("config_validation_failed " + " | ".join(structure_errors))
+    env_errors, env_warnings = _validate_config_env(cfg)
+    for warning in env_warnings:
+        logger.warning(warning)
+    if env_errors:
+        raise RuntimeError("config_env_validation_failed " + " | ".join(env_errors))
+
+    bootstrap_cfg = cfg.get("bootstrap", {}) if isinstance(cfg.get("bootstrap"), dict) else {}
+    if bool(bootstrap_cfg.get("force_stdio_flush", True)):
+        _force_stdio_unbuffered()
+    startup_check_dir = str(bootstrap_cfg.get("startup_write_check_dir", "data")).strip() or "data"
+    startup_writable = _assert_writable_directory(resolve_path(startup_check_dir, prefer_existing=False), label="startup write-check directory")
+    logger.info(f"startup_write_check_ok path={startup_writable}")
+
+    configured_pipeline_log = resolve_path(str(bootstrap_cfg.get("pipeline_log_file", DEFAULT_PIPELINE_LOG)), prefer_existing=False)
+    if configured_pipeline_log.resolve() != pipeline_log_path.resolve():
+        _assert_writable_directory(configured_pipeline_log.parent, label="configured pipeline log directory")
+        _attach_json_file_handler(logger, configured_pipeline_log)
+        logger.info(f"configured_pipeline_log_attached path={configured_pipeline_log}")
+
     runtime = get_runtime(cfg)
+    triage_cfg = cfg.get("triage", {}) if isinstance(cfg.get("triage"), dict) else {}
+    logger.info(
+        "triage_policy "
+        f"actionable_min_severity={str(triage_cfg.get('actionable_min_severity', 'high')).strip().lower() or 'high'} "
+        f"actionable_min_confidence={float(triage_cfg.get('actionable_min_confidence', 80.0) or 80.0)} "
+        f"actionable_min_impact={float(triage_cfg.get('actionable_min_impact', 70.0) or 70.0)} "
+        f"allow_correlation_alerts={int(bool(triage_cfg.get('allow_correlation_alerts', False)))}"
+    )
     pool_cfg = cfg.get("http_pool", {}) if isinstance(cfg.get("http_pool"), dict) else {}
     configure_http_pool(
         max_connections=int(pool_cfg.get("max_connections", max(50, int(runtime.get("concurrency", 10)) * 12))),
@@ -1605,9 +2158,11 @@ async def run_async(args: argparse.Namespace) -> int:
         retries=int(pool_cfg.get("retries", 0)),
         linux_socket_tuning=bool(pool_cfg.get("linux_socket_tuning", True)),
     )
-    ts = args.run_id.strip() or datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    out_dir = ensure_directory(resolve_path(args.out_dir), mode=0o755)
-    logger = setup_logging(out_dir / f"research_{ts}.jsonl", verbose=args.verbose)
+    logger.info(
+        "startup_http_pool_configured "
+        f"max_connections={int(pool_cfg.get('max_connections', max(50, int(runtime.get('concurrency', 10)) * 12)))} "
+        f"keepalive={int(pool_cfg.get('max_keepalive_connections', max(20, int(runtime.get('concurrency', 10)) * 4)))}"
+    )
     discord = DiscordDispatch(cfg=cfg.get("modules", {}).get("discord_notifier", {}), logger=logger)
     alert_router = AlertRouter(cfg=cfg.get("modules", {}).get("alert_router", {}), logger=logger)
     attach_alert_router(logger, alert_router)
@@ -1631,15 +2186,22 @@ async def run_async(args: argparse.Namespace) -> int:
     storage: PostgresStorage | None = None
     pg_cfg = cfg.get("storage", {}).get("postgres", {})
     pg_enabled = bool(pg_cfg.get("enabled", False))
-    dsn_env = str(pg_cfg.get("dsn_env", "HUNTEROPS_POSTGRES_DSN"))
-    dsn = os.getenv(dsn_env, "")
+    pg_required = bool(pg_cfg.get("required", True))
+    dsn_env = str(pg_cfg.get("dsn_env", "HUNTEROPS_POSTGRES_DSN")).strip() or "HUNTEROPS_POSTGRES_DSN"
+    dsn = str(os.getenv(dsn_env, "")).strip()
+    if pg_enabled and pg_required and not dsn:
+        raise RuntimeError(f"postgres_config_error enabled=true required=true missing_env={dsn_env}")
     if pg_enabled and dsn:
         try:
             storage = PostgresStorage(dsn=dsn, enabled=True)
             storage.ensure_research_schema()
+            logger.info(f"research_storage_ready backend=postgres env={dsn_env}")
         except Exception as err:
-            logger.error(f"research_storage_init_failed err={err}")
-            storage = None
+            raise RuntimeError(f"postgres_connection_failed env={dsn_env} err={type(err).__name__}: {err}") from err
+    elif pg_enabled and not dsn:
+        logger.warning(f"research_storage_disabled reason=missing_env env={dsn_env} required=false")
+
+    await _validate_redis_connectivity(cfg=cfg, logger=logger)
 
     h1_sync_engine = HackerOneSyncEngine(
         cfg=cfg.get("modules", {}).get("hackerone_sync_engine", {}),
@@ -1700,19 +2262,32 @@ async def run_async(args: argparse.Namespace) -> int:
     if args.plugins.strip():
         plugin_names = [x.strip().lower() for x in args.plugins.split(",") if x.strip()]
     else:
-        plugin_names = [
-            "deep_js_intelligence",
-            "parameter_intelligence",
-            "business_logic_sniper",
-            "race_condition_turbo",
-            "differential_auth_prover",
-            "vulnerability_correlation_engine",
-            "logic_prover",
-            "auth_matrix_engine",
-            "entity_cross_pollinator",
-            "report_synthesis",
-            "evidence_packager",
-        ]
+        plugin_profile = str(runtime.get("plugin_profile", "safe")).strip().lower() or "safe"
+        if plugin_profile == "full":
+            plugin_names = [
+                "deep_js_intelligence",
+                "parameter_intelligence",
+                "business_logic_sniper",
+                "race_condition_turbo",
+                "differential_auth_prover",
+                "vulnerability_correlation_engine",
+                "logic_prover",
+                "auth_matrix_engine",
+                "entity_cross_pollinator",
+                "report_synthesis",
+                "evidence_packager",
+            ]
+        else:
+            plugin_names = [
+                "deep_js_intelligence",
+                "parameter_intelligence",
+                "business_logic_sniper",
+                "race_condition_turbo",
+                "vulnerability_correlation_engine",
+                "report_synthesis",
+                "evidence_packager",
+            ]
+            logger.info(f"plugin_profile_selected profile={plugin_profile} mode=safe")
     dep_report = evaluate_runtime_dependencies(cfg, plugin_names)
     for msg in dep_report["critical_warnings"]:
         logger.critical(msg)
@@ -1721,7 +2296,14 @@ async def run_async(args: argparse.Namespace) -> int:
         logger.error("no_runnable_plugins_after_dependency_checks")
         await _shutdown_clients()
         return 6
+    logger.info(
+        "startup_phase_notifier_check begin=true "
+        f"discord_available={int(discord.available)} "
+        f"targets={len(targets)} "
+        f"plugins={len(plugin_names)}"
+    )
     await discord.send_system_online(run_id=ts, targets_count=len(targets), plugins_count=len(plugin_names))
+    logger.info("startup_phase_notifier_check completed=true")
     plugins = load_plugins(plugin_names)
     target_rps_map: dict[str, float] = {}
     if h1_manager.enabled:
@@ -1747,11 +2329,43 @@ async def run_async(args: argparse.Namespace) -> int:
     max_tasks_per_target = max(20, int(runtime.get("max_tasks_per_target", 1200)))
     queue_engine = HighValuePriorityQueue(max_size=int(runtime.get("task_queue_size", 4000)))
     wave_size = max(1, int(runtime.get("concurrency", 10)) * 2)
+    adaptive_levels_cfg = runtime.get("adaptive_levels", {}) if isinstance(runtime.get("adaptive_levels"), dict) else {}
+    adaptive_levels_enabled = bool(adaptive_levels_cfg.get("enabled", True))
+    try:
+        adaptive_level_min = max(1, int(adaptive_levels_cfg.get("min_level", 1) or 1))
+    except Exception:
+        adaptive_level_min = 1
+    try:
+        adaptive_level_max = max(adaptive_level_min, int(adaptive_levels_cfg.get("max_level", 3) or 3))
+    except Exception:
+        adaptive_level_max = max(adaptive_level_min, 3)
+    try:
+        adaptive_level_start = min(
+            adaptive_level_max,
+            max(adaptive_level_min, int(adaptive_levels_cfg.get("start_level", adaptive_level_min) or adaptive_level_min)),
+        )
+    except Exception:
+        adaptive_level_start = adaptive_level_min
+    try:
+        adaptive_escalate_after_clean_rounds = max(1, int(adaptive_levels_cfg.get("escalate_after_clean_rounds", 1) or 1))
+    except Exception:
+        adaptive_escalate_after_clean_rounds = 1
+    adaptive_demote_on_feedback = bool(adaptive_levels_cfg.get("demote_on_feedback", True))
+    adaptive_demote_on_timeout = bool(adaptive_levels_cfg.get("demote_on_timeout", True))
+    logger.info(
+        "adaptive_levels "
+        f"enabled={int(adaptive_levels_enabled)} "
+        f"min_level={adaptive_level_min} "
+        f"max_level={adaptive_level_max} "
+        f"start_level={adaptive_level_start} "
+        f"escalate_after_clean_rounds={adaptive_escalate_after_clean_rounds}"
+    )
 
     all_findings: list[Finding] = []
     notified_logic_signals: set[str] = set()
     notified_report_paths: set[str] = set()
     for target in targets:
+        logger.info(f"target_scan_start target={target}")
         if h1_manager.enabled and not h1_manager.in_scope(target):
             logger.warning(f"skip_out_of_scope_target target={target}")
             continue
@@ -1775,16 +2389,29 @@ async def run_async(args: argparse.Namespace) -> int:
         target_history: list[Finding] = []
         rounds = 0
         processed_tasks = 0
+        target_adaptive_level = adaptive_level_start
+        target_clean_round_streak = 0
         max_rounds = max(4, int(runtime.get("max_rounds_per_target", 6)))
         while pending and rounds < max_rounds and processed_tasks < max_tasks_per_target:
             rounds += 1
             budget_left = max_tasks_per_target - processed_tasks
             if budget_left <= 0:
                 break
-            wave_take = min(wave_size, budget_left)
+            round_timeout_before = scheduler.timeout_count(target)
+            level_multiplier = target_adaptive_level if adaptive_levels_enabled else 1
+            dynamic_wave_size = max(1, wave_size * max(1, level_multiplier))
+            wave_take = min(dynamic_wave_size, budget_left)
             current_wave = pending[:wave_take]
             pending = pending[wave_take:]
             processed_tasks += len(current_wave)
+            logger.info(
+                f"target_round_start target={target} "
+                f"round={rounds} "
+                f"level={target_adaptive_level} "
+                f"wave_tasks={len(current_wave)} "
+                f"pending_after_pop={len(pending)} "
+                f"processed_tasks={processed_tasks}"
+            )
             batch = await scheduler.run_batch(current_wave)
             if oob_engine.available and batch:
                 try:
@@ -1853,6 +2480,7 @@ async def run_async(args: argparse.Namespace) -> int:
                 run_id=ts,
                 logger=logger,
                 source="scan_round",
+                triage_cfg=triage_cfg,
             )
             target_history.extend(batch)
             if len(target_history) > 1200:
@@ -1873,6 +2501,8 @@ async def run_async(args: argparse.Namespace) -> int:
                 run_id=ts,
                 max_depth=recursion_max_depth,
             )
+            feedback_events_this_round = sum(len(statuses) for statuses in feedback.values())
+            timeouts_this_round = max(0, scheduler.timeout_count(target) - round_timeout_before)
             if discord.available and batch:
                 for finding in batch:
                     if not _is_logic_prover_confirmed(finding):
@@ -1922,7 +2552,14 @@ async def run_async(args: argparse.Namespace) -> int:
                 )
 
             next_tasks: list[Task] = []
-            next_tasks.extend(reactions.tasks_from_saved_findings(batch, run_id=ts, pack=pack))
+            next_tasks.extend(
+                reactions.tasks_from_saved_findings(
+                    batch,
+                    run_id=ts,
+                    pack=pack,
+                    available_plugins=available_plugins,
+                )
+            )
             next_tasks.extend(
                 delta_monitor.build_priority_tasks(
                     target=target,
@@ -2013,10 +2650,52 @@ async def run_async(args: argparse.Namespace) -> int:
                 seen.add(sig)
                 deduped.append(t)
             pending = queue_engine.rank(pending + deduped, findings=target_history)
+            if adaptive_levels_enabled:
+                prev_level = target_adaptive_level
+                demote_reasons: list[str] = []
+                if adaptive_demote_on_timeout and timeouts_this_round > 0:
+                    demote_reasons.append(f"timeouts={timeouts_this_round}")
+                if adaptive_demote_on_feedback and feedback_events_this_round > 0:
+                    demote_reasons.append(f"feedback={feedback_events_this_round}")
+                if demote_reasons:
+                    target_adaptive_level = max(adaptive_level_min, target_adaptive_level - 1)
+                    target_clean_round_streak = 0
+                    reason = ",".join(demote_reasons)
+                else:
+                    target_clean_round_streak += 1
+                    reason = "clean_round"
+                    if (
+                        target_clean_round_streak >= adaptive_escalate_after_clean_rounds
+                        and target_adaptive_level < adaptive_level_max
+                    ):
+                        target_adaptive_level += 1
+                        target_clean_round_streak = 0
+                        reason = f"clean_rounds={adaptive_escalate_after_clean_rounds}"
+                if target_adaptive_level != prev_level:
+                    logger.info(
+                        f"adaptive_level_change target={target} round={rounds} "
+                        f"from={prev_level} to={target_adaptive_level} reason={reason}"
+                    )
+            logger.info(
+                f"target_round_end target={target} "
+                f"round={rounds} "
+                f"level={target_adaptive_level} "
+                f"round_findings={len(batch)} "
+                f"round_feedback_events={feedback_events_this_round} "
+                f"round_timeouts={timeouts_this_round} "
+                f"pending_next={len(pending)} "
+                f"target_findings_total={len(target_history)}"
+            )
         if processed_tasks >= max_tasks_per_target:
             logger.warning(
                 f"target_task_budget_reached target={target} processed_tasks={processed_tasks} limit={max_tasks_per_target}"
             )
+        logger.info(
+            f"target_scan_completed target={target} "
+            f"rounds={rounds} "
+            f"processed_tasks={processed_tasks} "
+            f"target_findings={len(target_history)}"
+        )
 
     all_findings = dedupe_findings(all_findings)
 
@@ -2058,6 +2737,7 @@ async def run_async(args: argparse.Namespace) -> int:
                 run_id=ts,
                 logger=logger,
                 source="report_synthesis",
+                triage_cfg=triage_cfg,
             )
             if storage:
                 try:
@@ -2097,6 +2777,7 @@ async def run_async(args: argparse.Namespace) -> int:
                 run_id=ts,
                 logger=logger,
                 source="evidence_packager",
+                triage_cfg=triage_cfg,
             )
             if storage:
                 try:
@@ -2130,8 +2811,17 @@ async def run_async(args: argparse.Namespace) -> int:
                     )
 
     all_findings = dedupe_findings(all_findings)
+    actionable_findings, review_findings = split_findings_for_triage(all_findings, triage_cfg=triage_cfg)
     rows = serialize_findings(all_findings)
+    actionable_rows = serialize_findings(actionable_findings)
+    review_rows = serialize_findings(review_findings)
     persist_outputs(out_dir, f"{len(targets)}-targets", rows)
+    persist_triage_outputs(
+        out_dir,
+        run_id=ts,
+        actionable_rows=actionable_rows,
+        review_rows=review_rows,
+    )
     generate_auto_poc(out_dir=out_dir, findings=all_findings, min_confidence=80.0)
     generate_research_artifacts(
         findings=all_findings,
@@ -2159,20 +2849,34 @@ async def run_async(args: argparse.Namespace) -> int:
     if summary_rows:
         print_research_summary_table(summary_rows)
 
-    logger.info(f"research_pipeline_completed run_id={ts} findings={len(rows)}")
+    logger.info(
+        f"research_pipeline_completed run_id={ts} "
+        f"findings={len(rows)} "
+        f"actionable={len(actionable_rows)} "
+        f"review_queue={len(review_rows)}"
+    )
     await _shutdown_clients()
     return 0
 
 
 def main() -> int:
+    _force_stdio_unbuffered()
     args = parse_args()
-    install_uvloop_if_available()
+    _stderr_echo(f"research_pipeline_starting config={args.config} out_dir={args.out_dir}")
+    uvloop_enabled = install_uvloop_if_available()
+    _stderr_echo(
+        f"uvloop_install_result enabled={int(uvloop_enabled)} policy={type(asyncio.get_event_loop_policy()).__name__}"
+    )
     try:
         return asyncio.run(run_async(args))
     except KeyboardInterrupt:
+        _stderr_echo("research_pipeline_interrupted signal=KeyboardInterrupt")
         return 130
     except Exception as err:
-        print(f"[fatal] research_pipeline error: {err}")
+        _stderr_echo(f"fatal_startup_or_runtime_error type={type(err).__name__} err={err}")
+        traceback.print_exc(file=sys.stderr)
+        with contextlib.suppress(Exception):
+            sys.stderr.flush()
         return 1
 
 

@@ -1,6 +1,17 @@
 runtime:
   concurrency: 10
   timeout_seconds: 30
+  task_timeout_seconds: 180
+  batch_heartbeat_seconds: 15
+  plugin_profile: "safe"
+  adaptive_levels:
+    enabled: true
+    min_level: 1
+    max_level: 3
+    start_level: 1
+    escalate_after_clean_rounds: 1
+    demote_on_feedback: true
+    demote_on_timeout: true
   rate_limit_per_sec: 5
   max_retries: 2
   backoff_base_seconds: 1.2
@@ -28,6 +39,23 @@ app:
   default_root: "/opt/hunterops"
   root_env: "HUNTEROPS_HOME"
 
+bootstrap:
+  force_stdio_flush: true
+  pipeline_log_file: "data/pipeline.log"
+  startup_write_check_dir: "data"
+
+triage:
+  actionable_min_severity: "high"
+  actionable_min_confidence: 80
+  actionable_min_impact: 70
+  actionable_require_known_endpoint: true
+  alert_min_severity: "high"
+  alert_min_confidence: 80
+  alert_require_known_endpoint: true
+  allow_correlation_alerts: false
+  allow_correlation_submission: false
+  correlation_min_confidence: 88
+
 feedback:
   file: "data/processed/feedback_weights.json"
 
@@ -37,7 +65,17 @@ program_packs:
 storage:
   postgres:
     enabled: true
+    required: true
     dsn_env: "HUNTEROPS_POSTGRES_DSN"
+  redis:
+    enabled: true
+    required: true
+    url_env: "HUNTEROPS_REDIS_URL"
+    host_env: "REDIS_HOST"
+    port_env: "REDIS_PORT"
+    host: "redis"
+    port: 6379
+    connect_timeout_seconds: 2.0
 
 http_pool:
   max_connections: 160
@@ -177,7 +215,15 @@ plugins:
 modules:
   asset_discovery_engine:
     subdomain_prefixes: ["www", "api", "app", "admin", "staging", "dev"]
-    allowed_scope_suffixes: ["example.com"]
+    allowed_scope_suffixes:
+      - "robinhood.com"
+      - "robinhood.net"
+      - "rhinternal.net"
+      - "bitstamp.net"
+      - "tradepmr.com"
+      - "bitstamp.app"
+      - "saytechnologies.com"
+      - "say.rocks"
   recon_engine:
     seed_paths:
       - "/"
@@ -285,7 +331,9 @@ modules:
       - "/api/users?id=1"
       - "/api/orders?order_id=1001"
     evidence_dir: "data/evidence/engine"
-    max_safe_probes: 25
+    max_seed_paths: 8
+    max_script_fetch: 12
+    max_safe_probes: 10
   entity_cross_pollinator:
     cross_pollination_depth: 5
     max_entities: 120

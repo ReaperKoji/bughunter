@@ -32,7 +32,7 @@ if [ "${HUNTEROPS_SKIP_INFRA_CHECK:-0}" != "1" ] && [ -f "${ROOT}/scripts/check_
 fi
 
 if [ "$#" -eq 0 ]; then
-  set -- python scripts/research_pipeline.py --config config/engine.yaml
+  set -- python scripts/research_pipeline.py --config config/engine.yaml --targets-file "${TARGETS_FILE:-data/targets/in_scope_hosts.txt}"
 fi
 
 if [ "$(id -u)" -eq 0 ] && command -v gosu >/dev/null 2>&1; then

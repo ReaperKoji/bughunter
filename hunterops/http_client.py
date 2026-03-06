@@ -40,16 +40,42 @@ def _client_identifier() -> str:
     return raw or "reaperk0ji"
 
 
+def _bug_bounty_username(identifier: str) -> str:
+    direct = os.getenv("HUNTEROPS_BUG_BOUNTY_USERNAME", "").strip()
+    if direct:
+        return direct
+    legacy = os.getenv("BUG_BOUNTY_USERNAME", "").strip()
+    if legacy:
+        return legacy
+    return identifier
+
+
+def _bug_bounty_test_account_email() -> str:
+    direct = os.getenv("HUNTEROPS_TEST_ACCOUNT_EMAIL", "").strip()
+    if direct:
+        return direct
+    legacy = os.getenv("BUG_BOUNTY_TEST_ACCOUNT_EMAIL", "").strip()
+    if legacy:
+        return legacy
+    return ""
+
+
 def _standard_user_agent(identifier: str) -> str:
     return f"Mozilla/5.0 (HunterOps/3.0; BugBounty; {identifier})."
 
 
 def _merge_default_headers(headers: dict[str, str] | None) -> dict[str, str]:
     identifier = _client_identifier()
+    username = _bug_bounty_username(identifier)
+    test_account_email = _bug_bounty_test_account_email()
     merged = headers.copy() if isinstance(headers, dict) else {}
     # Force stable attribution for authorized bug bounty traffic.
     merged["X-H1-Client-Identifier"] = identifier
     merged["User-Agent"] = _standard_user_agent(identifier)
+    if username:
+        merged.setdefault("X-Bug-Bounty", username)
+    if test_account_email:
+        merged.setdefault("X-Test-Account-Email", test_account_email)
     return merged
 
 

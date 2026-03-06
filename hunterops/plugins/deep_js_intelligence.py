@@ -273,53 +273,56 @@ class PluginImpl(Plugin):
         dsn = os.getenv(dsn_env, "")
         if pg_enabled and dsn and run_id and endpoints:
             try:
-                storage = PostgresStorage(dsn=dsn, enabled=True)
-                storage.ensure_research_schema()
-                storage.upsert_attack_graph_nodes(
-                    run_id=run_id,
-                    target=task.target,
-                    nodes=_graph_nodes_from_endpoints(endpoints),
-                    discovery_source=self.name,
-                    confidence_score=78.0,
-                )
-                if discovered_entities:
-                    for item in discovered_entities:
-                        item["source_plugin"] = self.name
-                    storage.upsert_discovered_entities(run_id=run_id, target=task.target, rows=discovered_entities)
-                    storage.upsert_objects(
+                def _persist_storage() -> None:
+                    storage = PostgresStorage(dsn=dsn, enabled=True)
+                    storage.ensure_research_schema()
+                    storage.upsert_attack_graph_nodes(
                         run_id=run_id,
                         target=task.target,
-                        rows=_object_rows_from_entities(discovered_entities),
-                    )
-                edge_rows: list[dict[str, object]] = []
-                object_rows = _object_rows_from_entities(discovered_entities)
-                if object_rows:
-                    for obj in object_rows[:300]:
-                        src_endpoint = str(obj.get("source_endpoint", "/")) or "/"
-                        if not src_endpoint.startswith("/"):
-                            src_endpoint = urlparse(src_endpoint).path or "/"
-                        edge_rows.append(
-                            {
-                                "src_type": "endpoint",
-                                "src_key": src_endpoint,
-                                "dst_type": "object",
-                                "dst_key": str(obj.get("object_key", "")),
-                                "edge_type": "js_entity_discovery",
-                                "confidence_score": float(obj.get("confidence_score", 60) or 60),
-                                "metadata": {
-                                    "object_type": str(obj.get("object_type", "")),
-                                    "source_plugin": self.name,
-                                },
-                            }
-                        )
-                if edge_rows:
-                    storage.upsert_attack_graph_edges(
-                        run_id=run_id,
-                        target=task.target,
-                        edges=edge_rows,
+                        nodes=_graph_nodes_from_endpoints(endpoints),
                         discovery_source=self.name,
-                        confidence_score=72.0,
+                        confidence_score=78.0,
                     )
+                    if discovered_entities:
+                        for item in discovered_entities:
+                            item["source_plugin"] = self.name
+                        storage.upsert_discovered_entities(run_id=run_id, target=task.target, rows=discovered_entities)
+                        storage.upsert_objects(
+                            run_id=run_id,
+                            target=task.target,
+                            rows=_object_rows_from_entities(discovered_entities),
+                        )
+                    edge_rows: list[dict[str, object]] = []
+                    object_rows = _object_rows_from_entities(discovered_entities)
+                    if object_rows:
+                        for obj in object_rows[:300]:
+                            src_endpoint = str(obj.get("source_endpoint", "/")) or "/"
+                            if not src_endpoint.startswith("/"):
+                                src_endpoint = urlparse(src_endpoint).path or "/"
+                            edge_rows.append(
+                                {
+                                    "src_type": "endpoint",
+                                    "src_key": src_endpoint,
+                                    "dst_type": "object",
+                                    "dst_key": str(obj.get("object_key", "")),
+                                    "edge_type": "js_entity_discovery",
+                                    "confidence_score": float(obj.get("confidence_score", 60) or 60),
+                                    "metadata": {
+                                        "object_type": str(obj.get("object_type", "")),
+                                        "source_plugin": self.name,
+                                    },
+                                }
+                            )
+                    if edge_rows:
+                        storage.upsert_attack_graph_edges(
+                            run_id=run_id,
+                            target=task.target,
+                            edges=edge_rows,
+                            discovery_source=self.name,
+                            confidence_score=72.0,
+                        )
+
+                await asyncio.to_thread(_persist_storage)
             except Exception:
                 # Keep non-blocking behavior for research plugin execution.
                 pass
