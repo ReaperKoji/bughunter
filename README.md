@@ -1,4 +1,4 @@
-# HunterOps
+# bughunter (HunterOps)
 
 Autonomous bug bounty research framework for authorized targets only.
 
