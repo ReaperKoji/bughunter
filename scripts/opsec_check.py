@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 from typing import Any
 
 import yaml
+from hunterops.secrets import read_secret
 
 
 def main() -> None:
@@ -33,7 +33,7 @@ def main() -> None:
             warnings.append(f"Session {s.get('name')} has inline token; prefer token_env for secret management.")
         if s.get("cookie") and not s.get("cookie_env"):
             warnings.append(f"Session {s.get('name')} has inline cookie; prefer cookie_env for secret management.")
-        if s.get("token_env") and not os.getenv(str(s.get("token_env")), ""):
+        if s.get("token_env") and not read_secret(str(s.get("token_env"))):
             msg = f"Missing env token for session {s.get('name')}: {s.get('token_env')}"
             if args.strict_secrets:
                 issues.append(msg)

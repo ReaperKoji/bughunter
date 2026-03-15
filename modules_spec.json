@@ -1,0 +1,156 @@
+[
+  {
+    "name": "discovery-passive",
+    "description": "Collects passive recon signals and known endpoints without active probing.",
+    "inputs": { "type": "object", "properties": { "target": { "type": "string" } }, "required": ["target"] },
+    "outputs": { "type": "object", "properties": { "endpoints": { "type": "array", "items": { "type": "string" } } }, "required": ["endpoints"] },
+    "timeout_seconds": 10,
+    "retry_policy": { "max_attempts": 2, "backoff_seconds_initial": 1, "backoff_multiplier": 2, "jitter": true },
+    "throttling": { "default_req_per_sec_per_host": 2, "max_concurrency": 2 },
+    "no_response_threshold": 2,
+    "followup_module_on_no_response": null
+  },
+  {
+    "name": "subdomain-resolve",
+    "description": "Resolves subdomains from passive sources with safe DNS queries.",
+    "inputs": { "type": "object", "properties": { "domain": { "type": "string" } }, "required": ["domain"] },
+    "outputs": { "type": "object", "properties": { "hosts": { "type": "array", "items": { "type": "string" } } }, "required": ["hosts"] },
+    "timeout_seconds": 10,
+    "retry_policy": { "max_attempts": 2, "backoff_seconds_initial": 1, "backoff_multiplier": 2, "jitter": true },
+    "throttling": { "default_req_per_sec_per_host": 2, "max_concurrency": 2 },
+    "no_response_threshold": 2,
+    "followup_module_on_no_response": null
+  },
+  {
+    "name": "dir-fuzz",
+    "description": "Safe directory discovery using allowlisted wordlists and low rate.",
+    "inputs": { "type": "object", "properties": { "base_url": { "type": "string" }, "wordlist": { "type": "string" } }, "required": ["base_url", "wordlist"] },
+    "outputs": { "type": "object", "properties": { "paths": { "type": "array", "items": { "type": "string" } } }, "required": ["paths"] },
+    "timeout_seconds": 15,
+    "retry_policy": { "max_attempts": 1, "backoff_seconds_initial": 2, "backoff_multiplier": 2, "jitter": true },
+    "throttling": { "default_req_per_sec_per_host": 3, "max_concurrency": 2 },
+    "no_response_threshold": 1,
+    "followup_module_on_no_response": "healthcheck"
+  },
+  {
+    "name": "ffuf-fuzz-params",
+    "description": "Safe parameter discovery using small dictionaries and low rate.",
+    "inputs": { "type": "object", "properties": { "url": { "type": "string" }, "params": { "type": "array", "items": { "type": "string" } } }, "required": ["url"] },
+    "outputs": { "type": "object", "properties": { "parameters": { "type": "array", "items": { "type": "string" } } }, "required": ["parameters"] },
+    "timeout_seconds": 15,
+    "retry_policy": { "max_attempts": 1, "backoff_seconds_initial": 2, "backoff_multiplier": 2, "jitter": true },
+    "throttling": { "default_req_per_sec_per_host": 3, "max_concurrency": 2 },
+    "no_response_threshold": 1,
+    "followup_module_on_no_response": "healthcheck"
+  },
+  {
+    "name": "nuclei-template-scan",
+    "description": "Runs safe templates for misconfig and info leak only.",
+    "inputs": { "type": "object", "properties": { "target": { "type": "string" }, "templates": { "type": "array", "items": { "type": "string" } } }, "required": ["target", "templates"] },
+    "outputs": { "type": "object", "properties": { "findings": { "type": "array", "items": { "type": "object" } } }, "required": ["findings"] },
+    "timeout_seconds": 30,
+    "retry_policy": { "max_attempts": 1, "backoff_seconds_initial": 2, "backoff_multiplier": 2, "jitter": true },
+    "throttling": { "default_req_per_sec_per_host": 3, "max_concurrency": 2 },
+    "no_response_threshold": 1,
+    "followup_module_on_no_response": "healthcheck"
+  },
+  {
+    "name": "idempotent-verifier",
+    "description": "Replays safe requests to validate stability and reduce false positives.",
+    "inputs": { "type": "object", "properties": { "request": { "type": "object" } }, "required": ["request"] },
+    "outputs": { "type": "object", "properties": { "stable": { "type": "boolean" }, "fingerprint": { "type": "string" } }, "required": ["stable"] },
+    "timeout_seconds": 10,
+    "retry_policy": { "max_attempts": 2, "backoff_seconds_initial": 1, "backoff_multiplier": 2, "jitter": true },
+    "throttling": { "default_req_per_sec_per_host": 2, "max_concurrency": 1 },
+    "no_response_threshold": 2,
+    "followup_module_on_no_response": "healthcheck"
+  },
+  {
+    "name": "diffing-js",
+    "description": "Detects new endpoints by diffing JS bundles safely.",
+    "inputs": { "type": "object", "properties": { "bundle_url": { "type": "string" } }, "required": ["bundle_url"] },
+    "outputs": { "type": "object", "properties": { "new_endpoints": { "type": "array", "items": { "type": "string" } } }, "required": ["new_endpoints"] },
+    "timeout_seconds": 10,
+    "retry_policy": { "max_attempts": 1, "backoff_seconds_initial": 1, "backoff_multiplier": 2, "jitter": true },
+    "throttling": { "default_req_per_sec_per_host": 2, "max_concurrency": 1 },
+    "no_response_threshold": 2,
+    "followup_module_on_no_response": null
+  },
+  {
+    "name": "api-mapper",
+    "description": "Maps API surface from allowed specs (OpenAPI/Swagger) safely.",
+    "inputs": { "type": "object", "properties": { "spec_url": { "type": "string" } }, "required": ["spec_url"] },
+    "outputs": { "type": "object", "properties": { "api_paths": { "type": "array", "items": { "type": "string" } } }, "required": ["api_paths"] },
+    "timeout_seconds": 15,
+    "retry_policy": { "max_attempts": 1, "backoff_seconds_initial": 2, "backoff_multiplier": 2, "jitter": true },
+    "throttling": { "default_req_per_sec_per_host": 2, "max_concurrency": 1 },
+    "no_response_threshold": 2,
+    "followup_module_on_no_response": null
+  },
+  {
+    "name": "graphql-introspect-safe",
+    "description": "Performs safe GraphQL schema introspection when explicitly allowed.",
+    "inputs": { "type": "object", "properties": { "endpoint": { "type": "string" }, "allowed": { "type": "boolean" } }, "required": ["endpoint", "allowed"] },
+    "outputs": { "type": "object", "properties": { "schema": { "type": "object" } }, "required": ["schema"] },
+    "timeout_seconds": 15,
+    "retry_policy": { "max_attempts": 1, "backoff_seconds_initial": 2, "backoff_multiplier": 2, "jitter": true },
+    "throttling": { "default_req_per_sec_per_host": 2, "max_concurrency": 1 },
+    "no_response_threshold": 1,
+    "followup_module_on_no_response": null
+  },
+  {
+    "name": "client-secret-detector",
+    "description": "Detects client-side secrets in JS/HTML (safe regex only).",
+    "inputs": { "type": "object", "properties": { "content": { "type": "string" } }, "required": ["content"] },
+    "outputs": { "type": "object", "properties": { "signals": { "type": "array", "items": { "type": "string" } } }, "required": ["signals"] },
+    "timeout_seconds": 5,
+    "retry_policy": { "max_attempts": 1, "backoff_seconds_initial": 1, "backoff_multiplier": 2, "jitter": true },
+    "throttling": { "default_req_per_sec_per_host": 1, "max_concurrency": 1 },
+    "no_response_threshold": 1,
+    "followup_module_on_no_response": null
+  },
+  {
+    "name": "dedupe-engine",
+    "description": "Deduplicates findings by signature and fingerprint.",
+    "inputs": { "type": "object", "properties": { "finding": { "type": "object" } }, "required": ["finding"] },
+    "outputs": { "type": "object", "properties": { "is_duplicate": { "type": "boolean" } }, "required": ["is_duplicate"] },
+    "timeout_seconds": 2,
+    "retry_policy": { "max_attempts": 1, "backoff_seconds_initial": 1, "backoff_multiplier": 2, "jitter": false },
+    "throttling": { "default_req_per_sec_per_host": 1, "max_concurrency": 1 },
+    "no_response_threshold": 1,
+    "followup_module_on_no_response": null
+  },
+  {
+    "name": "prioritizer",
+    "description": "Computes priority score for targets/endpoints based on signals.",
+    "inputs": { "type": "object", "properties": { "metrics": { "type": "object" } }, "required": ["metrics"] },
+    "outputs": { "type": "object", "properties": { "priority_score": { "type": "number" } }, "required": ["priority_score"] },
+    "timeout_seconds": 2,
+    "retry_policy": { "max_attempts": 1, "backoff_seconds_initial": 1, "backoff_multiplier": 2, "jitter": false },
+    "throttling": { "default_req_per_sec_per_host": 1, "max_concurrency": 1 },
+    "no_response_threshold": 1,
+    "followup_module_on_no_response": null
+  },
+  {
+    "name": "scheduler",
+    "description": "Schedules module execution with throttling and retry policies.",
+    "inputs": { "type": "object", "properties": { "queue": { "type": "string" } }, "required": ["queue"] },
+    "outputs": { "type": "object", "properties": { "status": { "type": "string" } }, "required": ["status"] },
+    "timeout_seconds": 5,
+    "retry_policy": { "max_attempts": 1, "backoff_seconds_initial": 1, "backoff_multiplier": 2, "jitter": false },
+    "throttling": { "default_req_per_sec_per_host": 1, "max_concurrency": 1 },
+    "no_response_threshold": 1,
+    "followup_module_on_no_response": "healthcheck"
+  },
+  {
+    "name": "healthcheck",
+    "description": "Checks target responsiveness and basic availability.",
+    "inputs": { "type": "object", "properties": { "target": { "type": "string" } }, "required": ["target"] },
+    "outputs": { "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"] },
+    "timeout_seconds": 5,
+    "retry_policy": { "max_attempts": 2, "backoff_seconds_initial": 1, "backoff_multiplier": 2, "jitter": true },
+    "throttling": { "default_req_per_sec_per_host": 1, "max_concurrency": 1 },
+    "no_response_threshold": 2,
+    "followup_module_on_no_response": null
+  }
+]

@@ -34,6 +34,13 @@ def resolve_binary(tool: str) -> str | None:
     return shutil.which(name)
 
 
+def resolve_binary_for_plugin(tool: str) -> str | None:
+    name = str(tool or "").strip()
+    if not name:
+        return None
+    return shutil.which(name)
+
+
 def collect_plugin_binary_dependencies(config: dict[str, Any]) -> dict[str, set[str]]:
     deps: dict[str, set[str]] = {k: set(v) for k, v in STATIC_PLUGIN_DEPENDENCIES.items()}
     modules = config.get("modules", {}) if isinstance(config.get("modules"), dict) else {}
@@ -52,7 +59,7 @@ def collect_plugin_binary_dependencies(config: dict[str, Any]) -> dict[str, set[
 
 
 def check_binaries(binaries: list[str] | tuple[str, ...] | set[str]) -> dict[str, bool]:
-    return {str(b): bool(resolve_binary(str(b))) for b in binaries}
+    return {str(b): bool(resolve_binary_for_plugin(str(b))) for b in binaries}
 
 
 def evaluate_runtime_dependencies(config: dict[str, Any], requested_plugins: list[str]) -> dict[str, Any]:
@@ -65,7 +72,7 @@ def evaluate_runtime_dependencies(config: dict[str, Any], requested_plugins: lis
         needs = sorted(list(plugin_deps.get(plugin, set())))
         if not needs:
             continue
-        missing = [tool for tool in needs if not resolve_binary(tool)]
+        missing = [tool for tool in needs if not resolve_binary_for_plugin(tool)]
         if missing:
             disabled.append(plugin)
             plugin_missing[plugin] = missing

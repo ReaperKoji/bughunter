@@ -1,0 +1,20 @@
+[Unit]
+Description=Automator Orchestrator
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/automator --config /etc/automator/config.yaml
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=300
+StartLimitBurst=5
+User=automator
+Group=automator
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

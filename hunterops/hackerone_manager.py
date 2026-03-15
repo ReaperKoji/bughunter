@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any
@@ -10,6 +9,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from hunterops.runtime_paths import resolve_path, secure_secret_file
+from hunterops.secrets import read_secret
 from hunterops.types import Task
 
 
@@ -53,11 +53,11 @@ class HackerOneManager:
 
         user_env = str(self.cfg.get("api_user_env", "HACKERONE_API_USER"))
         token_env = str(self.cfg.get("api_token_env", "HACKERONE_API_TOKEN"))
-        self.api_user = os.getenv(user_env, "").strip()
-        self.api_token = os.getenv(token_env, "").strip()
+        self.api_user = read_secret(user_env)
+        self.api_token = read_secret(token_env)
         self.program_handles = [str(x).strip() for x in self.cfg.get("program_handles", []) if str(x).strip()]
         if not self.program_handles:
-            single = os.getenv("HACKERONE_PROGRAM_HANDLE", "").strip()
+            single = read_secret("HACKERONE_PROGRAM_HANDLE")
             if single:
                 self.program_handles = [single]
 

@@ -95,6 +95,63 @@ class ReportSynthesisTests(unittest.TestCase):
             self.assertNotIn("owner_token_abcdefghijklmnop123456", content)
             self.assertNotIn("attacker_token_abcdefghijklmnop999999", content)
 
+    def test_skips_non_replayable_synthesis_when_request_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp) / "reports"
+            plugin = PluginImpl()
+            task = Task(
+                plugin="report_synthesis",
+                target="capital.com",
+                payload={
+                    "run_id": "run_test_002",
+                    "findings": [
+                        {
+                            "plugin": "deep_js_intelligence",
+                            "target": "capital.com",
+                            "category": "js_information_leak",
+                            "severity": "low",
+                            "title": "Deep JS intelligence found 10 low/medium leak signals across 0 endpoints",
+                            "risk_score": 55,
+                            "metadata": {
+                                "novelty": 80,
+                                "impact": 58,
+                                "confidence": 84,
+                                "confidence_score": 84,
+                            },
+                            "evidence": {
+                                "endpoints": [],
+                                "request_response_sample": [],
+                            },
+                        }
+                    ],
+                },
+            )
+            context = {
+                "config": {
+                    "storage": {"postgres": {"enabled": False}},
+                    "modules": {
+                        "report_synthesis": {
+                            "out_dir": str(out_dir),
+                            "confidence_threshold": 80,
+                            "require_replayable_requests": True,
+                            "allow_root_endpoint": False,
+                            "exclude_categories": ["js_information_leak"],
+                            "exclude_source_plugins": ["deep_js_intelligence"],
+                            "auth_context_a": "Auth_Context_A",
+                            "auth_context_b": "Auth_Context_B",
+                            "enable_notifications": False,
+                            "enable_os_notification": False,
+                            "webhook_url": "",
+                            "webhook_env": "",
+                        }
+                    },
+                },
+                "runtime": {"timeout_seconds": 30},
+                "logger": _LoggerStub(),
+            }
+            findings = asyncio.run(plugin.run(task, context))
+            self.assertEqual(findings, [])
+
 
 class _LoggerStub:
     def info(self, _msg: str) -> None:

@@ -4,6 +4,7 @@ import re
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urljoin, urlparse
 
+from hunterops.endpoint_cache import EndpointCache
 from hunterops.http_client import request_http_async
 from hunterops.plugin_base import Plugin
 from hunterops.types import Finding, Task
@@ -82,6 +83,21 @@ class PluginImpl(Plugin):
 
         if not scripts:
             return []
+        cache = context.get("endpoint_cache")
+        known_endpoints: list[str] = []
+        if isinstance(cache, EndpointCache) and endpoints:
+            new_endpoints: list[str] = []
+            for ep in sorted(endpoints):
+                if cache.was_seen(plugin=self.name, target=task.target, endpoint=ep):
+                    known_endpoints.append(ep)
+                else:
+                    new_endpoints.append(ep)
+            if new_endpoints:
+                cache.mark_many(plugin=self.name, target=task.target, endpoints=new_endpoints)
+            endpoints = set(new_endpoints)
+        has_signals = bool(graphql_eps or api_bases or object_ids or token_names or auth_headers or params)
+        if not endpoints and not has_signals:
+            return []
         return [
             Finding(
                 plugin=self.name,
@@ -93,6 +109,7 @@ class PluginImpl(Plugin):
                     "request_response_sample": req_resp[:25],
                     "scripts_sample": sorted(scripts)[:50],
                     "endpoints_sample": sorted(endpoints)[:120],
+                    "known_endpoints_sample": sorted(known_endpoints)[:120],
                     "api_bases": sorted(api_bases)[:40],
                     "graphql_endpoints": sorted(graphql_eps)[:20],
                     "parameters_sample": sorted(params)[:120],
@@ -106,6 +123,7 @@ class PluginImpl(Plugin):
                     "impact": 45,
                     "discovery_source": "js",
                     "endpoints": sorted(endpoints),
+                    "known_endpoints": sorted(known_endpoints),
                 },
             )
         ]

@@ -1,0 +1,51 @@
+{
+  "title": "HunterOps Observability",
+  "timezone": "browser",
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Request Rate",
+      "targets": [
+        {"expr": "sum(rate(app_requests_total[5m]))", "legendFormat": "rps"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency (p95)",
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum(rate(app_latency_seconds_bucket[5m])) by (le))", "legendFormat": "p95"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "403/429 Rate",
+      "targets": [
+        {"expr": "sum(rate(app_403_429_total[5m]))", "legendFormat": "403/429"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "False Positive Spikes (by program)",
+      "targets": [
+        {"expr": "sum(rate(app_false_positive_spike_by_program_total[5m])) by (program)", "legendFormat": "{{program}}"}
+      ]
+    },
+    {
+      "type": "heatmap",
+      "title": "Baseline Divergence Heatmap",
+      "targets": [
+        {"expr": "sum(rate(app_baseline_score_bucket[5m])) by (le, program)", "legendFormat": "{{program}}"}
+      ]
+    },
+    {
+      "type": "gauge",
+      "title": "Active Sessions",
+      "targets": [
+        {"expr": "app_active_session_count", "legendFormat": "active"}
+      ]
+    }
+  ]
+}

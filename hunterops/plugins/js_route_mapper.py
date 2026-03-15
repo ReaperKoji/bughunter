@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
+from hunterops.endpoint_cache import EndpointCache
 from hunterops.http_client import request_http_async
 from hunterops.plugin_base import Plugin
 from hunterops.types import Finding, Task
@@ -49,6 +50,20 @@ class PluginImpl(Plugin):
         if not routes:
             return []
         mapped = sorted({x for x in routes if x.startswith("/")})
+        cache = context.get("endpoint_cache")
+        known_endpoints: list[str] = []
+        if isinstance(cache, EndpointCache) and mapped:
+            new_endpoints: list[str] = []
+            for ep in mapped:
+                if cache.was_seen(plugin=self.name, target=task.target, endpoint=ep):
+                    known_endpoints.append(ep)
+                else:
+                    new_endpoints.append(ep)
+            if new_endpoints:
+                cache.mark_many(plugin=self.name, target=task.target, endpoints=new_endpoints)
+            mapped = new_endpoints
+        if not mapped:
+            return []
         return [
             Finding(
                 plugin=self.name,
@@ -56,7 +71,11 @@ class PluginImpl(Plugin):
                 category="js_route_mapping",
                 severity="info",
                 title=f"JS route mapper extracted {len(mapped)} internal routes",
-                evidence={"scripts_sample": sorted(scripts)[:50], "routes_sample": mapped[:120]},
-                metadata={"novelty": 73, "confidence": 76, "impact": 38, "endpoints": mapped},
+                evidence={
+                    "scripts_sample": sorted(scripts)[:50],
+                    "routes_sample": mapped[:120],
+                    "known_routes_sample": known_endpoints[:120],
+                },
+                metadata={"novelty": 73, "confidence": 76, "impact": 38, "endpoints": mapped, "known_endpoints": known_endpoints},
             )
         ]

@@ -1,9 +1,29 @@
 runtime:
-  concurrency: 10
-  timeout_seconds: 30
-  task_timeout_seconds: 180
+  concurrency: 6
+  timeout_seconds: 45
+  task_timeout_seconds: 240
   batch_heartbeat_seconds: 15
-  plugin_profile: "safe"
+  plugin_metrics_enabled: true
+  plugin_profile: full
+  seed_plugins:
+  - asset_discovery_engine
+  - recon_engine
+  - surface_massive
+  - surface_mapper
+  - surface_expansion
+  - hidden_route_discovery
+  - hidden_route_detector
+  - crawler_intelligent
+  - intelligent_crawler
+  - deep_js_intelligence
+  - deep_js_analyzer
+  - javascript_deep_analysis
+  - js_route_mapper
+  - parameter_enum
+  - undocumented_api
+  - graphql_scan
+  - cors
+  - takeover
   adaptive_levels:
     enabled: true
     min_level: 1
@@ -12,15 +32,89 @@ runtime:
     escalate_after_clean_rounds: 1
     demote_on_feedback: true
     demote_on_timeout: true
-  rate_limit_per_sec: 5
+  rate_limit_per_sec: 10
+  global_http_rate_limit_per_sec: 10
+  global_http_max_inflight: 10
+  endpoint_cache_enabled: true
+  endpoint_cache_ttl_hours: 24
+  endpoint_cache_max_entries: 50000
+  persist_tasks: true
+  task_store_backend: auto
+  task_store_path: data/processed/task_queue.db
+  default_plugins:
+  - recon
+  - fingerprint
+  - scan
+  - cors
+  - takeover
+  - playwright_capture
+  - business_logic_sniper
+  - race_condition_turbo
+  scope_enforce_http: true
+  scope_allowlist_patterns: []
+  programs_file: config/programs.yaml
+  attack_chain_config: attack_pipeline.yaml
+  modules_spec_path: modules_spec.json
+  findings_schema_path: findings.schema.json
+  config_validation_enabled: true
+  config_validation_strict: false
+  findings_validation_strict: false
+  findings_retention_hours: 0
+  evidence_retention_hours: 0
+  reports_retention_hours: 0
+  allowed_hours_sleep_cap_seconds: 300
+  attack_chain_seed_enabled: true
+  attack_chain_seed_max_endpoints: 80
+  attack_chain_auto_run: true
+  endpoint_noise_patterns: []
+  priority_endpoint_patterns:
+  - "admin"
+  - "internal"
+  - "v1/debug"
+  - "config"
+  - "staging"
+  - "export"
+  - "graphiql"
+  priority_endpoint_boost: 12
+  roi_endpoint_patterns:
+  - "payment"
+  - "billing"
+  - "checkout"
+  - "transfer"
+  - "withdraw"
+  - "balance"
+  - "wallet"
+  - "payout"
+  - "refund"
+  - "invoice"
+  - "kyc"
+  roi_endpoint_boost: 18
+  roi_plugin_boosts:
+    business_logic_sniper: 20
+    differential_auth_prover: 16
+    auth_matrix_engine: 14
+    logic_prover: 12
+    parameter_intelligence: 6
+  roi_boost_cap: 30
+  auto_mute_enabled: true
+  auto_mute_window_seconds: 120
+  auto_mute_event_threshold: 6
+  auto_mute_seconds: 900
+  per_target_inflight: 2
+  per_target_jitter_ms: 80
+  delta_priority_min_score: 35
+  delta_priority_window_seconds: 900
+  findings_flush_every: 200
   max_retries: 2
   backoff_base_seconds: 1.2
   task_queue_size: 4000
   enable_recursive_tasks: true
-  recursion_max_depth: 5
+  recursion_max_depth: 6
   recursion_max_tasks: 800
   recursion_max_tasks_step: 200
   recursion_max_tasks_cap: 6000
+  max_rounds_per_target: 30
+  max_tasks_per_target: 5000
   feedback_max_retries: 2
   feedback_base_delay_seconds: 1.5
   feedback_max_delay_seconds: 28
@@ -29,54 +123,115 @@ runtime:
   stealth_mode: true
   proxies: []
   user_agents:
-    - "Mozilla/5.0 (compatible; Pinguinho/1.0; +https://hunterops.local)"
-    - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-    - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Firefox/121.0"
+  - Mozilla/5.0 (compatible; Pinguinho/1.0; +https://hunterops.local)
+  - Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0
+    Safari/537.36
+  - Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Firefox/121.0
   wordlists:
-    default: "wordlists/common.txt"
-
+    default: wordlists/common.txt
+  target_allowlist_patterns:
+  - "*.backend-capital.com"
+  - "payment.backend-capital.com"
+  - "*.capital.com"
+  - "open-api.capital.com"
+  target_denylist_patterns:
+  - "aff.capital.com"
+  - "go.capital.com"
+  - "register.capital.com"
+  - "careers.capital.com"
+  - "*.affiliates.backend-capital.com"
+  - "*.eduapp.backend-capital.com"
+  - "*.education.backend-capital.com"
+  - "help.capital.com"
+  - "relocate-with-us.capital.com"
+  - "3cxby.itcapital.io"
+  - "texis.itcapital.io"
+  target_priority_patterns:
+  - "payment.backend-capital.com"
+  - "*.backend-capital.com"
+  - "*.capital.com"
+  allowed_plugins:
+  - attack_chain_seed
+  - asset_discovery_engine
+  - recon_engine
+  - surface_massive
+  - crawler_intelligent
+  - intelligent_crawler
+  - deep_js_intelligence
+  - deep_js_analyzer
+  - javascript_deep_analysis
+  - hidden_route_discovery
+  - hidden_route_detector
+  - surface_expansion
+  - parameter_enum
+  - js_route_mapper
+  - surface_mapper
+  - undocumented_api
+  - graphql_scan
+  - cors
+  - takeover
+  - parameter_intelligence
+  - auth_matrix_engine
+  - differential_auth_prover
+  - business_logic_sniper
+  - logic_prover
+  - entity_cross_pollinator
+  - vulnerability_correlation_engine
+  - report_synthesis
+  - security_report_builder
+  - evidence_packager
+  blocked_plugins:
+  - race_condition_turbo
 app:
-  default_root: "/opt/hunterops"
-  root_env: "HUNTEROPS_HOME"
-
+  default_root: /opt/hunterops
+  root_env: HUNTEROPS_HOME
 bootstrap:
   force_stdio_flush: true
-  pipeline_log_file: "data/pipeline.log"
-  startup_write_check_dir: "data"
-
+  pipeline_log_file: data/pipeline.log
+  startup_write_check_dir: data
 triage:
-  actionable_min_severity: "high"
-  actionable_min_confidence: 80
-  actionable_min_impact: 70
+  actionable_min_severity: low
+  actionable_min_confidence: 72
+  actionable_min_impact: 45
   actionable_require_known_endpoint: true
-  alert_min_severity: "high"
-  alert_min_confidence: 80
+  actionable_disallow_root_endpoint: true
+  alert_min_severity: medium
+  alert_min_confidence: 78
   alert_require_known_endpoint: true
+  alert_disallow_root_endpoint: true
+  alert_require_actionable: true
+  fastlane_low_medium: true
+  fastlane_categories:
+  - information_disclosure
+  - info_leak
+  - open_redirect
+  - cors
+  - misconfiguration
+  - source_map
+  - path_disclosure
+  - idor_response_discrepancy
+  - subdomain_takeover
   allow_correlation_alerts: false
   allow_correlation_submission: false
   correlation_min_confidence: 88
-
 feedback:
-  file: "data/processed/feedback_weights.json"
-
+  file: data/processed/feedback_weights.json
 program_packs:
-  file: "config/program_packs.yaml"
-
+  file: config/program_packs.yaml
 storage:
   postgres:
     enabled: true
     required: true
-    dsn_env: "HUNTEROPS_POSTGRES_DSN"
+    dsn_env: HUNTEROPS_POSTGRES_DSN
   redis:
     enabled: true
-    required: true
-    url_env: "HUNTEROPS_REDIS_URL"
-    host_env: "REDIS_HOST"
-    port_env: "REDIS_PORT"
-    host: "redis"
+    required: false
+    url_env: HUNTEROPS_REDIS_URL
+    host_env: REDIS_HOST
+    port_env: REDIS_PORT
+    host: redis
     port: 6379
     connect_timeout_seconds: 2.0
-
 http_pool:
   max_connections: 160
   max_keepalive_connections: 48
@@ -85,167 +240,219 @@ http_pool:
   http2: false
   retries: 1
   linux_socket_tuning: true
-
+metrics:
+  enabled: true
+  port: 9108
 plugins:
-  - module: platform_sync
-    enabled: false
-  - module: polyglot_stack
-    enabled: true
-  - module: cve_intel
-    enabled: true
-  - module: cve_matcher
-    enabled: true
-  - module: asset_discovery_engine
-    enabled: true
-  - module: recon_engine
-    enabled: true
-  - module: surface_massive
-    enabled: true
-  - module: crawler_intel
-    enabled: true
-  - module: crawler_intelligent
-    enabled: true
-  - module: intelligent_crawler
-    enabled: true
-  - module: javascript_deep_analysis
-    enabled: true
-  - module: deep_js_analyzer
-    enabled: true
-  - module: deep_js_intelligence
-    enabled: true
-  - module: hidden_route_discovery
-    enabled: true
-  - module: hidden_route_detector
-    enabled: true
-  - module: parameter_enum
-    enabled: true
-  - module: surface_expansion
-    enabled: true
-  - module: js_route_mapper
-    enabled: true
-  - module: surface_mapper
-    enabled: true
-  - module: attack_graph_builder
-    enabled: true
-  - module: parameter_intelligence
-    enabled: true
-  - module: differential_auth_prover
-    enabled: true
-  - module: logic_prover
-    enabled: true
-  - module: auth_matrix_engine
-    enabled: true
-  - module: entity_cross_pollinator
-    enabled: true
-  - module: smart_payload_engine
-    enabled: true
-  - module: context_aware_fuzzing_engine
-    enabled: true
-  - module: behavioral_diff_engine
-    enabled: true
-  - module: idor_intelligence
-    enabled: true
-  - module: vulnerability_detection_engine
-    enabled: true
-  - module: vulnerability_correlation_engine
-    enabled: true
-  - module: evidence_collector
-    enabled: true
-  - module: vulnerability_engine
-    enabled: true
-  - module: idor_detection_engine
-    enabled: true
-  - module: response_diff_engine
-    enabled: true
-  - module: poc_generator
-    enabled: true
-  - module: report_builder
-    enabled: true
-  - module: report_synthesis
-    enabled: true
-  - module: evidence_packager
-    enabled: true
-  - module: security_report_builder
-    enabled: true
-  - module: recon
-    enabled: true
-  - module: fingerprint
-    enabled: true
-  - module: sensitive_endpoints
-    enabled: true
-  - module: undocumented_api
-    enabled: true
-  - module: graphql_scan
-    enabled: true
-  - module: fuzz
-    enabled: true
-  - module: fuzz_smart
-    enabled: true
-  - module: scan
-    enabled: true
-  - module: sensitive_data
-    enabled: true
-  - module: auth_compare
-    enabled: true
-  - module: idor_auto
-    enabled: true
-  - module: role_access
-    enabled: true
-  - module: auth_token_tests
-    enabled: true
-  - module: race_basic
-    enabled: true
-  - module: payment_logic
-    enabled: true
-  - module: business_logic_sniper
-    enabled: true
-  - module: race_condition_turbo
-    enabled: true
-  - module: deep_endpoint
-    enabled: true
-  - module: stateful_flows
-    enabled: true
-  - module: cors
-    enabled: true
-  - module: takeover
-    enabled: true
-  - module: playwright_capture
-    enabled: true
-
+- module: platform_sync
+  enabled: false
+- module: polyglot_stack
+  enabled: true
+- module: cve_intel
+  enabled: false
+- module: cve_matcher
+  enabled: false
+- module: asset_discovery_engine
+  enabled: true
+- module: recon_engine
+  enabled: true
+- module: surface_massive
+  enabled: true
+- module: crawler_intel
+  enabled: true
+- module: crawler_intelligent
+  enabled: true
+- module: intelligent_crawler
+  enabled: true
+- module: javascript_deep_analysis
+  enabled: true
+- module: deep_js_analyzer
+  enabled: true
+- module: deep_js_intelligence
+  enabled: true
+- module: hidden_route_discovery
+  enabled: true
+- module: hidden_route_detector
+  enabled: true
+- module: parameter_enum
+  enabled: true
+- module: surface_expansion
+  enabled: true
+- module: js_route_mapper
+  enabled: true
+- module: surface_mapper
+  enabled: true
+- module: attack_graph_builder
+  enabled: true
+- module: parameter_intelligence
+  enabled: true
+- module: differential_auth_prover
+  enabled: true
+- module: logic_prover
+  enabled: true
+- module: auth_matrix_engine
+  enabled: true
+- module: entity_cross_pollinator
+  enabled: true
+- module: smart_payload_engine
+  enabled: true
+- module: context_aware_fuzzing_engine
+  enabled: true
+- module: behavioral_diff_engine
+  enabled: true
+- module: idor_intelligence
+  enabled: true
+- module: vulnerability_detection_engine
+  enabled: true
+- module: vulnerability_correlation_engine
+  enabled: true
+- module: evidence_collector
+  enabled: true
+- module: vulnerability_engine
+  enabled: true
+- module: idor_detection_engine
+  enabled: true
+- module: response_diff_engine
+  enabled: true
+- module: poc_generator
+  enabled: true
+- module: report_builder
+  enabled: true
+- module: report_synthesis
+  enabled: true
+- module: evidence_packager
+  enabled: true
+- module: attack_chain_seed
+  enabled: true
+- module: security_report_builder
+  enabled: true
+- module: recon
+  enabled: true
+- module: fingerprint
+  enabled: true
+- module: sensitive_endpoints
+  enabled: true
+- module: undocumented_api
+  enabled: true
+- module: graphql_scan
+  enabled: true
+- module: fuzz
+  enabled: false
+- module: fuzz_smart
+  enabled: false
+- module: scan
+  enabled: false
+- module: sensitive_data
+  enabled: true
+- module: auth_compare
+  enabled: true
+- module: idor_auto
+  enabled: true
+- module: role_access
+  enabled: true
+- module: auth_token_tests
+  enabled: true
+- module: race_basic
+  enabled: false
+- module: payment_logic
+  enabled: true
+- module: business_logic_sniper
+  enabled: true
+- module: race_condition_turbo
+  enabled: false
+- module: deep_endpoint
+  enabled: true
+- module: stateful_flows
+  enabled: true
+- module: cors
+  enabled: true
+- module: takeover
+  enabled: true
+- module: playwright_capture
+  enabled: true
 modules:
+  attack_chain_seed:
+    output_file: data/processed/attack_chain_discovered.txt
+    max_endpoints: 120
+    auto_run: true
+    max_auto_run: 3
+    auto_run_require_scope: true
+    auto_run_require_program: true
+    attack_chain_config: attack_pipeline.yaml
   asset_discovery_engine:
-    subdomain_prefixes: ["www", "api", "app", "admin", "staging", "dev"]
+    subdomain_prefixes:
+    - www
+    - api
+    - app
+    - admin
+    - staging
+    - dev
+    - trade
+    - trading
+    - payment
+    - open-api
+    - backend
+    - internal
     allowed_scope_suffixes:
-      - "robinhood.com"
-      - "robinhood.net"
-      - "rhinternal.net"
-      - "bitstamp.net"
-      - "tradepmr.com"
-      - "bitstamp.app"
-      - "saytechnologies.com"
-      - "say.rocks"
+    - backend-capital.com
+    - capital.com
+    - itcapital.io
   recon_engine:
     seed_paths:
-      - "/"
-      - "/login"
-      - "/api"
-      - "/docs"
-    max_pages: 15
-    authenticated_crawling: false
-    sessions_file: "data/sessions.yaml"
+    - /
+    - /api
+    - /v1/api
+    - /graphql
+    - /openapi.json
+    - /swagger.json
+    max_pages: 55
+    recursive_discovery_commands:
+    - subfinder -d {target} -recursive -all -silent
+    - amass enum -passive -src -d {target}
+    - assetfinder --subs-only {target}
+    recursive_suffix_allowlist:
+    - backend-capital.com
+    - itcapital.io
+    - capital.com
+    recursive_max_hosts: 160
+    misconfig_probe_paths:
+    - /.git/HEAD
+    - /.git/config
+    - /.env
+    - /.env.local
+    - /.env.backup
+    - /.env.production
+    - /phpinfo.php
+    - /info.php
+    - /server-status
+    - /actuator/env
+    - /actuator/configprops
+    misconfig_probe_statuses:
+    - 200
+    - 206
+    - 401
+    - 403
+    - 500
+    misconfig_probe_max_hosts: 220
+    mass_pinger_suffixes:
+    - capital.com
+    - itcapital.io
+    - backend-capital.com
+    authenticated_crawling: true
+    sessions_file: data/sessions.yaml
   surface_massive:
     commands:
-      - "subfinder -d {target} -silent"
-      - "amass enum -passive -d {target}"
-      - "assetfinder --subs-only {target}"
-      - "gau {target}"
-      - "waybackurls {target}"
-      - "katana -u https://{target} -silent"
+    - subfinder -d {target} -recursive -all -silent
+    - amass enum -passive -src -d {target}
+    - assetfinder --subs-only {target}
+    - gau {target}
+    - waybackurls {target}
+    - katana -u https://{target} -silent
   crawler_intel:
     commands:
-      - "katana -u https://{target} -silent -jc"
-      - "hakrawler -url https://{target} -plain"
-      - "gospider -s https://{target} -q"
+    - katana -u https://{target} -silent -jc
+    - hakrawler -url https://{target} -plain
+    - gospider -s https://{target} -q
   crawler_intelligent:
     max_pages: 25
     max_depth: 2
@@ -256,84 +463,100 @@ modules:
   javascript_deep_analysis:
     max_scripts: 25
     seed_paths:
-      - "/"
-      - "/app.js"
-      - "/main.js"
-      - "/static/js/app.js"
+    - /sap/bc/ui5_ui5/sap/zc_ad_appl/
+    - /sap/bc/ui5_ui5/sap/zc_ad_appl/index.html
+    - /sap/bc/ui5_ui5/sap/zc_ad_appl/Component.js
+    - /sap/opu/odata/sap/ZC_AD_APPLICANT_SRV/$metadata
   deep_js_analyzer:
-    max_scripts: 30
+    max_scripts: 80
     seed_paths:
-      - "/"
-      - "/app.js"
-      - "/main.js"
-      - "/static/js/app.js"
+    - /
+    - /app.js
+    - /main.js
+    - /static/js/main.js
+    - /assets/index.js
+    - /v1/api
+    - /graphql
   deep_js_intelligence:
-    max_scripts: 30
-    entropy_threshold: 3.7
+    max_scripts: 120
+    max_source_maps: 40
+    entropy_threshold: 3.6
+    request_delay_seconds: 0.05
+    include_source_maps: true
+    include_comment_leaks: true
+    include_metadata_keys: true
     seed_paths:
-      - "/"
-      - "/app.js"
-      - "/main.js"
-      - "/static/js/app.js"
+    - /
+    - /app.js
+    - /main.js
+    - /static/js/main.js
+    - /assets/index.js
+    - /v1/api
+    - /graphql
+    focus_endpoint_keywords:
+    - /graphql
+    - /v1/api
+    - /payment
+    - /trade
+    - /trading
+    - /wallet
+    - /transaction
   hidden_route_discovery:
     route_seeds:
-      - "/api/"
-      - "/api/v1/"
-      - "/v1/"
-      - "/internal/"
-      - "/admin/"
-      - "/debug/"
-      - "/test/"
-      - "/config/"
+    - /
+    - /api
+    - /v1/api
+    - /graphql
+    - /internal
+    - /staging
   hidden_route_detector:
     route_seeds:
-      - "/api/"
-      - "/api/v1/"
-      - "/internal/"
-      - "/admin/"
-      - "/debug/"
-      - "/config/"
+    - /
+    - /api
+    - /v1/api
+    - /graphql
+    - /internal
     source_paths:
-      - "/"
-      - "/swagger.json"
-      - "/openapi.json"
-      - "/api-docs"
-      - "/main.js"
-      - "/app.js"
+    - /
+    - /app.js
+    - /main.js
+    - /static/js/main.js
+    - /assets/index.js
   parameter_enum:
     seed_paths:
-      - "/"
-      - "/search"
-      - "/api"
-      - "/api/users?id=1"
+    - /api
+    - /v1/api
+    - /graphql
+    - /v1/api/accounts?id=1
+    - /v1/api/payments?id=1
   surface_expansion:
     seed_endpoints:
-      - "/api/users"
-      - "/api/orders"
-      - "/api/profile"
-      - "/api/invoices"
+    - /
+    - /api
+    - /v1/api
+    - /graphql
+    - /openapi.json
   js_route_mapper:
     max_scripts: 30
   surface_mapper:
     seed_paths:
-      - "/"
-      - "/api"
-      - "/login"
-      - "/admin"
-      - "/graphql"
-      - "/api/users"
+    - /
+    - /api
+    - /v1/api
+    - /graphql
   attack_graph_builder:
-    findings_source: "data/reports/engine/findings.json"
+    findings_source: data/reports/engine/findings.json
   parameter_intelligence:
     seed_paths:
-      - "/"
-      - "/search?q=test"
-      - "/api/users?id=1"
-      - "/api/orders?order_id=1001"
-    evidence_dir: "data/evidence/engine"
-    max_seed_paths: 8
-    max_script_fetch: 12
-    max_safe_probes: 10
+    - /api
+    - /v1/api
+    - /graphql
+    - /v1/api/trading/orders?userId=1001
+    - /v1/api/payments/transactions?accountId=1001
+    evidence_dir: data/evidence/engine
+    max_seed_paths: 24
+    max_script_fetch: 24
+    max_safe_probes: 36
   entity_cross_pollinator:
     cross_pollination_depth: 5
     max_entities: 120
@@ -341,294 +564,487 @@ modules:
     fanout_per_endpoint: 4
     max_generated_tasks: 220
     max_probe_requests: 80
-    sessions_file: "data/sessions.yaml"
-    auth_context_b: "user_b"
+    sessions_file: data/sessions.yaml
+    auth_context_b: user_b
     target_plugins:
-      - "parameter_intelligence"
-      - "differential_auth_prover"
+    - parameter_intelligence
+    - differential_auth_prover
   differential_auth_prover:
-    sessions_file: "data/sessions.yaml"
-    auth_context_a: "user"
-    auth_context_b: "user_b"
-    session_owner: "user"
-    session_other: "user_b"
-    min_structure_similarity_pct: 90
+    sessions_file: data/sessions.yaml
+    auth_context_a: user
+    auth_context_b: user_b
+    session_owner: user
+    session_other: user_b
+    tier1_scope_suffixes:
+    - backend-capital.com
+    tier2_scope_suffixes:
+    - capital.com
+    enforce_scope_suffixes: true
+    financial_endpoint_focus_only: true
+    min_structure_similarity_pct: 88
     min_content_similarity_pct: 85
+    flag_length_header_diff: true
+    min_length_diff_bytes: 1
+    min_header_count_diff: 1
+    low_signal_confidence_floor: 62
     max_candidates: 80
-    max_entities: 120
-    max_probes: 90
+    max_entities: 180
+    max_probes: 110
+    max_probes_tier1: 260
+    max_probes_tier2: 170
     high_risk_param_types:
-      - "numeric_id"
-      - "identifier"
-      - "uuid"
-      - "token"
+    - numeric_id
+    - identifier
+    - uuid
+    - token
+  session_guardian:
+    enabled: true
+    sessions_file: data/sessions.yaml
+    vault_file: config/vault.yaml
+    session_names:
+    - user
+    - user_b
+    heartbeat_paths:
+    - /v1/api/profile
+    - /
+    unauthorized_statuses:
+    - 401
+    - 403
+    login_indicators:
+    - /login
+    - /signin
+    - /auth
+    - saml
+    - idp
+    check_interval_seconds: 300
+    heartbeat_timeout_seconds: 25
+    headless: true
+    browser_heartbeat: false
+    disable_browser_on_runtime_errors: true
+    playwright_runtime_retry_seconds: 900
+    capture_refresh_screenshot: false
+    capture_report_screenshot: false
+    max_report_screenshots: 24
+    screenshot_dir: data/evidence/session_guardian
+  impact_validator:
+    enabled: true
+    sessions_file: data/sessions.yaml
+    auth_context_a: user
+    auth_context_b: user_b
+    timeout_seconds: 25
+    max_replays_per_batch: 30
+    similarity_threshold: 88
+    safe_methods:
+    - GET
+    - HEAD
+    require_json_response: true
+    min_sensitive_signal_score: 3
+    ignore_paths:
+    - /
+    - /index.html
+    api_path_hints:
+    - /api
+    - /v1/api
+    - /v2/api
+    - /graphql
+    - /open-api
+    sensitive_query_params:
+    - id
+    - user_id
+    - userid
+    - account_id
+    - accountid
+    - wallet_id
+    - walletid
+    - trade_id
+    - tradeid
+    - position_id
+    - positionid
+    - transaction_id
+    - transactionid
+    - order_id
+    - orderid
+    - payment_id
+    - paymentid
+    - portfolio_id
+    - portfolioid
+    - email
+    - phone
+    - iban
+    anon_success_status:
+    - 200
+    - 201
+    anon_block_status:
+    - 401
+    - 403
+    candidate_markers:
+    - idor
+    - bac
+    - broken_object
+    - data_exposure
+    - object_level_authorization
+    - authorization_matrix
   auth_matrix_engine:
-    sessions_file: "data/sessions.yaml"
-    auth_context_a: "user"
-    auth_context_b: "user_b"
+    sessions_file: data/sessions.yaml
+    auth_context_a: user
+    auth_context_b: user_b
     min_structure_similarity_pct: 90
     min_confidence: 50
     verified_threshold: 85
     max_endpoints: 220
     max_probes: 140
-    verified_dir: "data/evidence/verified"
+    verified_dir: data/evidence/verified
   ade_brain:
-    evidence_dir: "data/evidence/ade"
+    evidence_dir: data/evidence/ade
     max_spawn_tasks: 220
     max_boundary_candidates: 30
   report_engine:
     enabled: true
-    evidence_dir: "data/evidence/ade"
-    ready_dir: "data/ready_to_submit"
-    state_file: "data/processed/report_engine_state.json"
+    evidence_dir: data/evidence/ade
+    ready_dir: data/ready_to_submit
+    state_file: data/processed/report_engine_state.json
     auto_submit_h1_draft: false
-    draft_endpoint: "https://api.hackerone.com/v1/reports/drafts"
-    identifier_env: "H1_API_IDENTIFIER"
-    token_env: "H1_API_TOKEN"
+    draft_endpoint: https://api.hackerone.com/v1/reports/drafts
+    identifier_env: H1_API_IDENTIFIER
+    token_env: H1_API_TOKEN
+  shannon_validator:
+    enabled: true
+    binary_path: /opt/shannon_ref/shannon
+    timeout_seconds: 30
+    max_candidates_per_run: 24
+    thresholds:
+      min_confidence: 55
+      min_impact: 35
+      min_severity: low
   hackerone_sync_engine:
     enabled: false
     strict_sync: false
-    graphql_endpoint: "https://api.hackerone.com/graphql"
+    graphql_endpoint: https://api.hackerone.com/graphql
     sync_interval_seconds: 21600
-    sync_key: "h1_public_bounty_scope_sync"
-    targets_file: "data/targets/in_scope_hosts.txt"
+    sync_key: h1_public_bounty_scope_sync
+    targets_file: data/targets/in_scope_hosts.txt
     exclude_low_signal: false
     min_signal: 0
     attack_graph_confidence: 98
   hackerone_manager:
     enabled: false
     strict_scope_enforcement: true
-    base_url: "https://api.hackerone.com/v1"
-    api_user_env: "HACKERONE_API_USER"
-    api_token_env: "HACKERONE_API_TOKEN"
+    base_url: https://api.hackerone.com/v1
+    api_user_env: HACKERONE_API_USER
+    api_token_env: HACKERONE_API_TOKEN
     program_handles: []
     structured_scope_only: true
     poll_interval_seconds: 900
-    scope_cache_file: "data/processed/h1_scope_cache.json"
+    scope_cache_file: data/processed/h1_scope_cache.json
     default_target_rps: 1.0
+  intigriti_manager:
+    enabled: false
+    strict_scope_enforcement: true
+    base_url: https://api.intigriti.com/external/researcher
+    api_token_env: INTIGRITI_API_TOKEN
+    program_handles:
+    - capital-com
+    include_hosts:
+    - payment.backend-capital.com
+    - open-api.capital.com
+    exclude_hosts:
+    - help.capital.com
+    - aff.capital.com
+    - go.capital.com
+    - register.capital.com
+    - careers.capital.com
+    - 3cxby.itcapital.io
+    - texis.itcapital.io
+    poll_interval_seconds: 900
+    scope_cache_file: data/processed/intigriti_scope_cache.json
+    default_target_rps: 5.0
   oob_engine:
     enabled: false
-    provider: "custom"
-    callback_domain_env: "HUNTEROPS_OOB_CALLBACK_DOMAIN"
-    poll_url_env: "HUNTEROPS_OOB_POLL_URL"
-    api_token_env: "HUNTEROPS_OOB_API_TOKEN"
-    callback_domain: ""
-    poll_url: ""
+    provider: custom
+    callback_domain_env: HUNTEROPS_OOB_CALLBACK_DOMAIN
+    poll_url_env: HUNTEROPS_OOB_POLL_URL
+    api_token_env: HUNTEROPS_OOB_API_TOKEN
+    callback_domain: ''
+    poll_url: ''
     poll_interval_seconds: 30
     max_injections_per_target: 80
     max_concurrent_per_target: 3
-    state_file: "data/processed/oob_state.json"
-    events_file: "data/processed/oob_events.jsonl"
+    state_file: data/processed/oob_state.json
+    events_file: data/processed/oob_events.jsonl
   smart_payload_engine:
-    parameter_source: "data/reports/engine/findings.json"
-    out_file: "data/processed/smart_payloads.json"
+    parameter_source: data/reports/engine/findings.json
+    out_file: data/processed/smart_payloads.json
   context_aware_fuzzing_engine:
-    payload_file: "data/processed/smart_payloads.json"
-    sessions_file: "data/sessions.yaml"
+    payload_file: data/processed/smart_payloads.json
+    sessions_file: data/sessions.yaml
     max_tests: 80
   behavioral_diff_engine:
-    sessions_file: "data/sessions.yaml"
+    sessions_file: data/sessions.yaml
     paths:
-      - "/api/me"
-      - "/api/profile"
-      - "/api/orders?id=1"
-      - "/search?q=test"
+    - /api/me
+    - /v1/api/profile
+    - /v1/api/trading/orders?id=1001
+    - /v1/api/payments/transactions?accountId=1001
+    - /graphql
   idor_intelligence:
-    sessions_file: "data/sessions.yaml"
+    sessions_file: data/sessions.yaml
     candidate_urls:
-      - "https://{target}/api/users?id=1"
-      - "https://{target}/api/orders?order_id=1001"
-      - "https://{target}/api/invoices?invoice_id=1001"
+    - https://{target}/v1/api/trading/orders?userId=1001
+    - https://{target}/v1/api/trading/positions?accountId=1001
+    - https://{target}/v1/api/payments/transactions?accountId=1001
+    - https://{target}/v1/api/wallets?userId=1001
+    - https://{target}/graphql
   vulnerability_detection_engine:
-    findings_source: "data/reports/engine/findings.json"
+    findings_source: data/reports/engine/findings.json
   vulnerability_correlation_engine:
-    findings_source: "data/reports/engine/findings.json"
+    findings_source: data/reports/engine/findings.json
   evidence_collector:
-    findings_source: "data/reports/engine/findings.json"
-    out_dir: "data/evidence/engine_collected"
+    findings_source: data/reports/engine/findings.json
+    out_dir: data/evidence/engine_collected
   vulnerability_engine:
     paths:
-      - "/"
-      - "/api"
-      - "/debug"
-      - "/admin"
-      - "/download?file=report.pdf"
-      - "/redirect?next=/dashboard"
+    - /
+    - /api
+    - /v1/api
+    - /graphql
+    - /openapi.json
   idor_detection_engine:
-    sessions_file: "data/sessions.yaml"
-    evidence_dir: "data/evidence/engine"
+    sessions_file: data/sessions.yaml
+    evidence_dir: data/evidence/engine
     candidate_urls:
-      - "https://{target}/api/users?id=1"
-      - "https://{target}/api/orders?order_id=1001"
-      - "https://{target}/api/invoices?invoice_id=1001"
+    - https://{target}/v1/api/trading/orders?userId=1001
+    - https://{target}/v1/api/trading/positions?accountId=1001
+    - https://{target}/v1/api/payments/transactions?accountId=1001
+    - https://{target}/v1/api/wallets?userId=1001
+    - https://{target}/graphql
   response_diff_engine:
     paths:
-      - "/api/me"
-      - "/api/profile"
-      - "/api/orders?id=1"
-      - "/search?q=test"
+    - /api/me
+    - /v1/api/profile
+    - /v1/api/trading/orders?userId=1001
+    - /v1/api/payments/transactions?accountId=1001
+    - /graphql
   poc_generator:
-    findings_source: "data/reports/engine/findings.json"
-    out_dir: "data/reports/engine/poc_auto"
+    findings_source: data/reports/engine/findings.json
+    out_dir: data/reports/engine/poc_auto
   report_builder:
-    findings_source: "data/reports/engine/findings.json"
-    out_dir: "data/reports/engine/bug_reports"
+    findings_source: data/reports/engine/findings.json
+    out_dir: data/reports/engine/bug_reports
     min_risk: 55
   report_synthesis:
-    out_dir: "data/reports"
-    confidence_threshold: 80
-    auth_context_a: "Auth_Context_A"
-    auth_context_b: "Auth_Context_B"
+    out_dir: data/reports
+    confidence_threshold: 78
+    require_replayable_requests: true
+    allow_root_endpoint: false
+    exclude_categories:
+    - js_information_leak
+    exclude_source_plugins:
+    - deep_js_intelligence
+    auth_context_a: user
+    auth_context_b: user_b
     enable_notifications: true
     enable_os_notification: true
-    webhook_env: "HUNTEROPS_CRITICAL_WEBHOOK"
-    webhook_url: ""
+    webhook_env: HUNTEROPS_CRITICAL_WEBHOOK
+    webhook_url: ''
   discord_notifier:
     enabled: true
-    bot_name: "Pinguinho"
-    recon_webhook_url: ""
-    findings_webhook_url: ""
-    recon_webhook_env: "HUNTEROPS_DISCORD_RECON_WEBHOOK"
-    findings_webhook_env: "HUNTEROPS_DISCORD_FINDINGS_WEBHOOK"
+    bot_name: Pinguinho
+    recon_webhook_url: ''
+    findings_webhook_url: ''
+    recon_webhook_env: HUNTEROPS_DISCORD_RECON_WEBHOOK
+    findings_webhook_env: HUNTEROPS_DISCORD_FINDINGS_WEBHOOK
     timeout_seconds: 4
     max_concurrent: 4
-    send_startup_check: true
+    recon_dedupe_ttl_seconds: 3600
+    findings_dedupe_persist_file: data/processed/discord_finding_dedupe.json
+    findings_dedupe_persist_ttl_seconds: 86400
+    findings_dedupe_persist_max_entries: 20000
+    findings_dedupe_persist_flush_seconds: 30
+    send_startup_check: false
   alert_router:
     enabled: true
     timeout_seconds: 5
     dedupe_ttl_seconds: 1800
+    dedupe_persist_file: data/processed/alert_dedupe.json
+    dedupe_persist_ttl_seconds: 86400
+    dedupe_persist_max_entries: 20000
+    dedupe_persist_flush_seconds: 30
+    cooldown_seconds: 600
+    cooldown_scope: program
+    cooldown_category_allowlist:
+    - business_logic
+    - auth
+    - idor
+    - access_control
+    cooldown_bypass_severities:
+    - critical
     max_embed_poc_chars: 1100
     discord_attach_threshold: 1200
     discord_max_attachment_bytes: 7000000
-    discord_research_webhook: ""
-    discord_critical_webhook: ""
-    discord_research_env: "HUNTEROPS_DISCORD_RESEARCH_WEBHOOK"
-    discord_critical_env: "HUNTEROPS_DISCORD_CRITICAL_WEBHOOK"
-    slack_research_webhook: ""
-    slack_critical_webhook: ""
-    slack_research_env: "HUNTEROPS_SLACK_RESEARCH_WEBHOOK"
-    slack_critical_env: "HUNTEROPS_SLACK_CRITICAL_WEBHOOK"
-    report_url_base: ""
+    discord_research_webhook: ''
+    discord_critical_webhook: ''
+    discord_research_env: HUNTEROPS_DISCORD_RESEARCH_WEBHOOK
+    discord_critical_env: HUNTEROPS_DISCORD_CRITICAL_WEBHOOK
+    slack_research_webhook: ''
+    slack_critical_webhook: ''
+    slack_research_env: HUNTEROPS_SLACK_RESEARCH_WEBHOOK
+    slack_critical_env: HUNTEROPS_SLACK_CRITICAL_WEBHOOK
+    report_url_base: ''
   logic_prover:
-    sessions_file: "data/sessions.yaml"
-    auth_context_a: "user"
-    auth_context_b: "user_b"
+    sessions_file: data/sessions.yaml
+    auth_context_a: user
+    auth_context_b: user_b
     min_structure_similarity_pct: 90
     max_candidates: 90
     max_depth: 3
   evidence_packager:
-    out_dir: "data/evidence/bundles"
+    out_dir: data/evidence/bundles
     confidence_threshold: 80
   security_report_builder:
-    findings_source: "data/reports/engine/findings.json"
-    out_dir: "data/reports/engine/security_reports"
+    findings_source: data/reports/engine/findings.json
+    findings_source_fallback: data/reports/research/triage/actionable_findings.json
+    out_dir: data/reports/engine/security_reports
+    impact_first: true
+    include_curl_commands: true
+    include_screenshots: false
+    screenshot_session: user
+    include_min_severity: low
+    intigriti_program_handle: capital-com
   recon:
+    extra_discovery_targets:
+    - itcapital.io
+    - backend-capital.com
     commands:
-      - "subfinder -d {target} -silent"
-      - "amass enum -passive -d {target}"
-      - "assetfinder --subs-only {target}"
-      - "gau {target}"
-      - "waybackurls {target}"
+    - subfinder -d {target} -recursive -all -silent
+    - amass enum -passive -src -d {target}
+    - assetfinder --subs-only {target}
+    - gau {target}
+    - waybackurls {target}
   fingerprint:
     commands:
-      - "httpx -u https://{target} -silent -status-code -title -tech-detect"
+    - httpx -u https://{target} -silent -status-code -title -tech-detect
   fuzz:
     commands:
-      - "ffuf -w {wordlist} -u https://{target}/FUZZ -mc 200,204,301,302,307,401,403"
+    - ffuf -w {wordlist} -u https://{target}/FUZZ -mc 200,204,301,302,307,401,403
   scan:
     commands:
-      - "nuclei -u https://{target} -silent -severity critical,high,medium -t templates/nuclei"
+    - nuclei -u https://{target} -silent -severity critical,high,medium,low -t templates/nuclei
   fuzz_smart:
     commands:
-      - "ffuf -w {wordlist} -u https://{target}/FUZZ -mc 200,201,202,204,301,302,307,401,403 -of json -o -"
+    - ffuf -w {wordlist} -u https://{target}/FUZZ -mc 200,201,202,204,301,302,307,401,403
+      -of json -o -
   auth_compare:
-    sessions_file: "data/sessions.yaml"
-    evidence_dir: "data/evidence/engine"
+    sessions_file: data/sessions.yaml
+    evidence_dir: data/evidence/engine
     paths:
-      - "/api/me"
-      - "/api/profile"
-      - "/api/users"
+    - /api/me
+    - /v1/api/profile
+    - /v1/api/trading/orders?userId=1001
+    - /v1/api/payments/transactions?accountId=1001
+    - /graphql
   idor_auto:
-    sessions_file: "data/sessions.yaml"
-    evidence_dir: "data/evidence/engine"
+    sessions_file: data/sessions.yaml
+    evidence_dir: data/evidence/engine
     candidate_urls:
-      - "https://{target}/api/profile?id=1"
-      - "https://{target}/api/invoices?invoice_id=1001"
+    - https://{target}/v1/api/trading/orders?userId=1001
+    - https://{target}/v1/api/trading/positions?accountId=1001
+    - https://{target}/v1/api/payments/transactions?accountId=1001
+    - https://{target}/v1/api/wallets?userId=1001
+    - https://{target}/graphql
   role_access:
-    sessions_file: "data/sessions.yaml"
-    evidence_dir: "data/evidence/engine"
-    role_order: ["user", "admin"]
+    sessions_file: data/sessions.yaml
+    evidence_dir: data/evidence/engine
+    role_order:
+    - user
+    - admin
     paths:
-      - "/admin"
-      - "/api/admin/users"
+    - /api/me
+    - /v1/api/profile
+    - /v1/api/trading/orders?userId=1001
+    - /v1/api/payments/transactions?accountId=1001
+    - /graphql
   auth_token_tests:
-    sessions_file: "data/sessions.yaml"
-    evidence_dir: "data/evidence/engine"
-    path: "/api/me"
+    sessions_file: data/sessions.yaml
+    evidence_dir: data/evidence/engine
+    path: /v1/api/profile
   race_basic:
     paths:
-      - "/api/coupon/apply"
-      - "/api/wallet/redeem"
-      - "/api/plan/upgrade"
+    - /sap/opu/odata/sap/ZC_AD_APPLICANT_SRV/?$top=1&$format=json
+    - /sap/opu/odata/sap/ZC_AD_APPLICANT_SRV/?$skip=1&$top=1&$format=json
+    - /sap/bc/ui5_ui5/sap/zc_ad_appl/
   payment_logic:
     enabled: true
   business_logic_sniper:
-    base_scheme: "https"
-    sessions_file: "data/sessions.yaml"
-    auth_context_a: "user"
-    auth_context_b: "user_b"
+    base_scheme: https
+    sessions_file: data/sessions.yaml
+    auth_context_a: user
+    auth_context_b: user_b
     seed_paths:
-      - "/api/cart?price=100&quantity=1"
-      - "/api/checkout?amount=100&currency=USD"
-      - "/api/coupon/apply?coupon=WELCOME10&total=100"
+    - /v1/api/trading/orders?userId=1001
+    - /v1/api/trading/positions?accountId=1001
+    - /v1/api/payments/transactions?accountId=1001
+    - /v1/api/wallets?userId=1001
+    - /graphql
   race_condition_turbo:
-    base_scheme: "https"
-    sessions_file: "data/sessions.yaml"
-    auth_context: "user"
-    burst_size: 24
+    base_scheme: https
+    sessions_file: data/sessions.yaml
+    auth_context: user
+    burst_size: 8
     max_candidates: 12
     variance_threshold_ms: 50.0
     seed_paths:
-      - "/api/wallet/withdraw?amount=1"
-      - "/api/redeem?amount=1"
-      - "/api/transfer?amount=1"
+    - /sap/opu/odata/sap/ZC_AD_APPLICANT_SRV/?$top=1&$format=json
+    - /sap/opu/odata/sap/ZC_AD_APPLICANT_SRV/?$skip=1&$top=1&$format=json
+    - /sap/bc/ui5_ui5/sap/zc_ad_appl/
   deep_endpoint:
     paths:
-      - "/api/profile"
-      - "/api/orders"
-      - "/api/invoices"
+    - /
+    - /api
+    - /v1/api
+    - /graphql
+    - /openapi.json
   stateful_flows:
-    sessions_file: "data/sessions.yaml"
-    evidence_dir: "data/evidence/engine"
+    sessions_file: data/sessions.yaml
+    evidence_dir: data/evidence/engine
     flows:
-      - name: checkout
-        steps: ["/api/cart", "/api/checkout", "/api/payment/confirm"]
-      - name: upgrade
-        steps: ["/api/plan/current", "/api/plan/upgrade", "/api/plan/confirm"]
-      - name: reset
-        steps: ["/api/password/request-reset", "/api/password/confirm-reset"]
-      - name: approval
-        steps: ["/api/request/create", "/api/request/approve"]
+    - name: checkout
+      steps:
+      - /api/cart
+      - /api/checkout
+      - /api/payment/confirm
+    - name: upgrade
+      steps:
+      - /api/plan/current
+      - /api/plan/upgrade
+      - /api/plan/confirm
+    - name: reset
+      steps:
+      - /api/password/request-reset
+      - /api/password/confirm-reset
+    - name: approval
+      steps:
+      - /api/request/create
+      - /api/request/approve
   sensitive_data:
     paths:
-      - "/api/me"
-      - "/api/profile"
-      - "/api/users"
+    - /api/me
+    - /api/profile
+    - /api/users
   polyglot_stack:
     commands:
-      - "node tools/node/spa_probe.mjs {target}"
-      - "cargo run --manifest-path tools/rust-analyzer/Cargo.toml --quiet -- {target}"
-      - "java -cp tools/jvm ApiSurfaceInspector {target}"
-      - "kotlinc -script tools/jvm/RoleDiffInspector.kt {target}"
-      - "Rscript tools/r/analytics.R data/findings/submissions.jsonl"
+    - node tools/node/spa_probe.mjs {target}
+    - cargo run --manifest-path tools/rust-analyzer/Cargo.toml --quiet -- {target}
+    - java -cp tools/jvm ApiSurfaceInspector {target}
+    - kotlinc -script tools/jvm/RoleDiffInspector.kt {target}
+    - Rscript tools/r/analytics.R data/findings/submissions.jsonl
   cve_intel:
-    catalog_file: "data/processed/cve_catalog.json"
+    catalog_file: data/processed/cve_catalog.json
   cve_matcher:
-    catalog_file: "data/processed/cve_catalog.json"
+    catalog_file: data/processed/cve_catalog.json
     probe_paths:
-      - "/"
-      - "/api"
-      - "/graphql"
-      - "/.well-known/security.txt"
+    - /
+    - /api
+    - /graphql
+    - /.well-known/security.txt
     min_token_matches: 2
     top_n: 8

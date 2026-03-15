@@ -1,0 +1,35 @@
+groups:
+  - name: hunterops-alerts
+    rules:
+      - alert: HunterOpsHigh403
+        expr: sum(rate(app_responses_403_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate of 403 responses"
+          description: "Possible WAF blocks. Reduce rate limits or pause target."
+      - alert: HunterOpsHigh429
+        expr: sum(rate(app_responses_429_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate of 429 responses"
+          description: "Rate limiting detected. Reduce throughput or apply backoff."
+      - alert: HunterOpsFalsePositiveSpike
+        expr: app_false_positive_estimate > 0.4
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "False-positive estimate high"
+          description: "Tighten thresholds or increase validation depth."
+      - alert: HunterOpsLatencyP95High
+        expr: histogram_quantile(0.95, sum(rate(app_scan_duration_seconds_bucket[5m])) by (le)) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pipeline latency elevated"
+          description: "Investigate downstream bottlenecks or reduce concurrency."

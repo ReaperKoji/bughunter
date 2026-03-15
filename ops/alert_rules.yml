@@ -1,0 +1,19 @@
+groups:
+  - name: hunterops-alerts
+    rules:
+      - alert: HunterOpsHigh403429
+        expr: sum(rate(app_403_429_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate of 403/429 responses"
+          description: "Reduce rate limits or pause targets; investigate WAF blocks."
+      - alert: HunterOpsFalsePositiveSpike
+        expr: sum(rate(app_false_positive_spike_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "False-positive spike detected"
+          description: "Increase validation thresholds; review baseline divergence."

@@ -13,6 +13,7 @@
 - `quality_gate.py`: Pre-submission checklist validator with risk score output.
 - `coverage_and_kpi.py`: Coverage/gaps report, backlog generation, weekly KPI, priority queue.
 - `nuclei_curation.py`: Classifies nuclei templates into high-signal/noise sets from outcomes.
+- `nuclei_curation_apply.py`: Builds a curated nuclei templates directory from curation output.
 - `opsec_check.py`: OPSEC/security posture check (scope, secrets, session hygiene).
 - `feedback_loop.py`: Builds adaptive scoring adjustments from triage/payout data.
 - `calibrate_profiles.py`: Calibrates program profile weights from real submissions.
@@ -40,4 +41,4 @@
 7. `dedupe_findings.py`
 8. `priority_queue.py`
 9. `quality_gate.py` (before every submission)
-10. `coverage_and_kpi.py` + `nuclei_curation.py` (weekly cadence)
+10. `coverage_and_kpi.py` + `nuclei_curation.py` + `nuclei_curation_apply.py` (weekly cadence)

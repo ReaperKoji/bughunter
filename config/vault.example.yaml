@@ -1,0 +1,19 @@
+# Example vault config (do not store real secrets in repo)
+# Values should be encrypted blobs or references to a KMS/secret manager
+vault:
+  provider: local
+  encryption: "AES-GCM"
+  key_reference: "env:HUNTEROPS_VAULT_KEY"
+  entries:
+    capital-com/session_cookie:
+      cipher_text: "ENC::<base64>"
+      notes: "Session cookie for Capital.com. Rotate regularly."
+      access_policy:
+        allowed_users: ["secops", "hunterops"]
+        max_ttl_hours: 24
+    admissions/jwt_primary:
+      cipher_text: "ENC::<base64>"
+      notes: "JWT for Admissions program (test account)."
+      access_policy:
+        allowed_users: ["secops"]
+        max_ttl_hours: 12

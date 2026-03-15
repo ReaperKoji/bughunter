@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hunterops.local/schemas/finding.json",
+  "title": "Finding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "program_id",
+    "target",
+    "path",
+    "method",
+    "severity",
+    "signatures",
+    "evidence",
+    "confidence_score",
+    "remediation_hint",
+    "timestamp",
+    "proof_template"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 128
+    },
+    "program_id": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 128
+    },
+    "target": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 2048
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "method": {
+      "type": "string",
+      "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["P1", "P2", "P3", "P4"]
+    },
+    "signatures": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 2,
+        "maxLength": 128
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "summary", "sanitized_snippet"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["header", "body", "status", "timing", "diff", "meta"]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 1024
+          },
+          "sanitized_snippet": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 4000
+          }
+        }
+      }
+    },
+    "confidence_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "remediation_hint": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 2000
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "proof_template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["curl", "notes"],
+      "properties": {
+        "curl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      }
+    }
+  }
+}

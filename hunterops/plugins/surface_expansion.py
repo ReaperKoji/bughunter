@@ -3,6 +3,7 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from hunterops.http_client import request_http_async
+from hunterops.endpoint_cache import EndpointCache
 from hunterops.plugin_base import Plugin
 from hunterops.types import Finding, Task
 
@@ -39,6 +40,16 @@ class PluginImpl(Plugin):
         for e in payload_eps:
             if isinstance(e, str):
                 seeds.add(urlparse(e).path if e.startswith("http") else e)
+        cache = context.get("endpoint_cache")
+        if isinstance(cache, EndpointCache):
+            filtered = set()
+            for ep in seeds:
+                if cache.was_seen(plugin=self.name, target=task.target, endpoint=ep):
+                    continue
+                filtered.add(ep)
+            if not filtered:
+                return []
+            seeds = filtered
 
         candidates: set[str] = set()
         for s in seeds:
@@ -48,6 +59,8 @@ class PluginImpl(Plugin):
             url = ep if ep.startswith("http") else f"{base}{ep}"
             r = await request_http_async("GET", url, headers={}, timeout=timeout)
             status = int(r.get("status", 0))
+            if isinstance(cache, EndpointCache):
+                cache.mark_seen(plugin=self.name, target=task.target, endpoint=ep)
             if status not in {0, 404}:
                 hits.append({"endpoint": ep, "status": status, "length": int(r.get("length", 0))})
 

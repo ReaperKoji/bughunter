@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-import os
+import hashlib
+import json
 import re
+import time
 from datetime import UTC, datetime
+from pathlib import Path
+from threading import Lock
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
+from hunterops.runtime_paths import ensure_directory, resolve_path
+from hunterops.secrets import read_secret
 TOKEN_RE = re.compile(r"""(?i)\b(bearer\s+)([a-z0-9\-._~+/]+=*)""")
 SECRET_KV_RE = re.compile(r"""(?i)\b(token|secret|api[_-]?key|authorization)\s*[:=]\s*([^\s,;]+)""")
 URL_SECRET_RE = re.compile(r"""(?i)(token|key|secret|auth)=([^&\s]+)""")
@@ -54,15 +61,29 @@ class DiscordDispatch:
         recon_env = str(settings.get("recon_webhook_env", "HUNTEROPS_DISCORD_RECON_WEBHOOK")).strip()
         findings_env = str(settings.get("findings_webhook_env", "HUNTEROPS_DISCORD_FINDINGS_WEBHOOK")).strip()
         if recon_env and not self.recon_webhook:
-            self.recon_webhook = str(os.getenv(recon_env, "")).strip()
+            self.recon_webhook = read_secret(recon_env)
         if findings_env and not self.findings_webhook:
-            self.findings_webhook = str(os.getenv(findings_env, "")).strip()
+            self.findings_webhook = read_secret(findings_env)
         self.timeout_seconds = float(settings.get("timeout_seconds", 4.0))
         self.max_concurrent = max(1, int(settings.get("max_concurrent", 4)))
         self.send_startup_check = bool(settings.get("send_startup_check", True))
+        self.recon_dedupe_ttl_seconds = max(30.0, float(settings.get("recon_dedupe_ttl_seconds", 1800.0)))
+        self.findings_dedupe_persist_ttl_seconds = max(60.0, float(settings.get("findings_dedupe_persist_ttl_seconds", 86400.0)))
+        self.findings_dedupe_persist_max_entries = max(1000, int(settings.get("findings_dedupe_persist_max_entries", 20000)))
+        self.findings_dedupe_persist_flush_seconds = max(5.0, float(settings.get("findings_dedupe_persist_flush_seconds", 30.0)))
+        self.findings_dedupe_persist_file = resolve_path(
+            str(settings.get("findings_dedupe_persist_file", "data/processed/discord_finding_dedupe.json")),
+            prefer_existing=False,
+        )
         self._sem = asyncio.Semaphore(self.max_concurrent)
         self._client: httpx.AsyncClient | None = None
         self._pending: set[asyncio.Task[Any]] = set()
+        self._recon_dedupe: dict[str, float] = {}
+        self._findings_persisted: dict[str, float] = {}
+        self._findings_dirty = False
+        self._findings_last_flush = 0.0
+        self._findings_lock = Lock()
+        self._load_findings_persisted()
 
     @property
     def available(self) -> bool:
@@ -101,6 +122,81 @@ class DiscordDispatch:
         task.add_done_callback(lambda t: self._pending.discard(t))
 
     @staticmethod
+    def _normalize_endpoint(endpoint: str) -> str:
+        raw = str(endpoint or "").strip()
+        if not raw:
+            return "/"
+        if raw.startswith("http://") or raw.startswith("https://"):
+            parsed = urlparse(raw)
+            return parsed.path or "/"
+        parsed = urlparse(raw)
+        path = parsed.path or raw
+        return path if path.startswith("/") else f"/{path}"
+
+    def _load_findings_persisted(self) -> None:
+        if not self.findings_dedupe_persist_file or self.findings_dedupe_persist_ttl_seconds <= 0:
+            return
+        path = Path(self.findings_dedupe_persist_file)
+        if not path.exists():
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(raw, dict):
+            return
+        now = time.time()
+        for key, stamp in raw.items():
+            try:
+                ts = float(stamp)
+            except Exception:
+                continue
+            if now - ts <= self.findings_dedupe_persist_ttl_seconds:
+                self._findings_persisted[str(key)] = ts
+        self._prune_findings_persisted(now)
+
+    def _prune_findings_persisted(self, now: float) -> None:
+        if not self._findings_persisted:
+            return
+        ttl = self.findings_dedupe_persist_ttl_seconds
+        for key, stamp in list(self._findings_persisted.items()):
+            if now - float(stamp) > ttl:
+                self._findings_persisted.pop(key, None)
+        if len(self._findings_persisted) > self.findings_dedupe_persist_max_entries:
+            items = sorted(self._findings_persisted.items(), key=lambda row: row[1])
+            for key, _ in items[: max(0, len(items) - self.findings_dedupe_persist_max_entries)]:
+                self._findings_persisted.pop(key, None)
+
+    def _flush_findings_persisted(self, now: float) -> None:
+        if not self._findings_dirty:
+            return
+        if not self.findings_dedupe_persist_file:
+            return
+        try:
+            ensure_directory(Path(self.findings_dedupe_persist_file).parent, mode=0o755)
+            payload = json.dumps(self._findings_persisted, ensure_ascii=True, indent=2)
+            Path(self.findings_dedupe_persist_file).write_text(payload + "\n", encoding="utf-8")
+            self._findings_last_flush = now
+            self._findings_dirty = False
+        except Exception:
+            return
+
+    def _is_duplicate_findings_persistent(self, key: str) -> bool:
+        if not self.findings_dedupe_persist_file or self.findings_dedupe_persist_ttl_seconds <= 0:
+            return False
+        now = time.time()
+        with self._findings_lock:
+            self._prune_findings_persisted(now)
+            previous = self._findings_persisted.get(key)
+            if previous is not None and (now - float(previous)) <= self.findings_dedupe_persist_ttl_seconds:
+                return True
+            self._findings_persisted[key] = now
+            self._findings_dirty = True
+            if (now - self._findings_last_flush) >= self.findings_dedupe_persist_flush_seconds:
+                self._flush_findings_persisted(now)
+            return False
+
+    @staticmethod
     def _embed(title: str, description: str, color: int, fields: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         embed: dict[str, Any] = {
             "title": _truncate(_redact_text(title), 240),
@@ -123,6 +219,22 @@ class DiscordDispatch:
     ) -> None:
         if not self.recon_webhook:
             return
+        signature_payload = {
+            "target": str(target or "").strip().lower(),
+            "new_endpoints": sorted([str(x) for x in new_endpoints if isinstance(x, str)]),
+            "changed_js": sorted([str(x) for x in changed_js if isinstance(x, str)]),
+            "new_parameters": sorted([str(x) for x in new_parameters if isinstance(x, str)]),
+        }
+        signature = hashlib.sha1(json.dumps(signature_payload, ensure_ascii=True, sort_keys=True).encode("utf-8")).hexdigest()
+        now = time.monotonic()
+        for key, stamp in list(self._recon_dedupe.items()):
+            if now - float(stamp) > self.recon_dedupe_ttl_seconds:
+                self._recon_dedupe.pop(key, None)
+        prev = self._recon_dedupe.get(signature)
+        if prev is not None and (now - float(prev)) < self.recon_dedupe_ttl_seconds:
+            return
+        self._recon_dedupe[signature] = now
+
         description = f"Surface Expansion Detected on `{target}`"
         fields = [
             {"name": "Delta Score", "value": f"`{round(float(delta_score), 2)}`", "inline": True},
@@ -154,8 +266,15 @@ class DiscordDispatch:
         report_path: str,
         severity_level: str = "",
         estimated_payout: str = "",
+        dedupe_key: str = "",
     ) -> None:
         if not self.findings_webhook:
+            return
+        key = str(dedupe_key or "").strip()
+        if not key:
+            norm_endpoint = self._normalize_endpoint(endpoint)
+            key = f"{target}|{norm_endpoint}|{title}|{severity_level}"
+        if self._is_duplicate_findings_persistent(key):
             return
         color = RED if confidence >= 80 else ORANGE
         fields = [
@@ -203,6 +322,10 @@ class DiscordDispatch:
             except Exception:
                 pass
         self._pending.clear()
+        try:
+            self._flush_findings_persisted(time.time())
+        except Exception:
+            pass
         if self._client is not None:
             try:
                 await self._client.aclose()

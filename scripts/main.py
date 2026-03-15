@@ -60,8 +60,17 @@ def cmd_ffuf(url: str, wordlist: str) -> str:
     return f"ffuf -w {wordlist} -u {url}/FUZZ -mc 200,204,301,302,307,401,403"
 
 
+def _nuclei_templates_path() -> str:
+    curated = Path("templates/nuclei-curated")
+    if curated.exists():
+        if any(curated.rglob("*.yaml")) or any(curated.rglob("*.yml")):
+            return str(curated)
+    return "templates/nuclei"
+
+
 def cmd_nuclei(input_file: Path) -> str:
-    return f"nuclei -l {input_file} -silent -severity critical,high,medium -t templates/nuclei"
+    templates = _nuclei_templates_path()
+    return f"nuclei -l {input_file} -silent -severity critical,high,medium -t {templates}"
 
 
 def main() -> None:

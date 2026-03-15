@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 from urllib.request import Request, urlopen
 
+from hunterops.secrets import read_secret
 
 def _get_json(url: str, headers: dict[str, str], timeout: int) -> dict[str, Any]:
     req = Request(url=url, headers=headers)
@@ -15,8 +15,8 @@ def _get_json(url: str, headers: dict[str, str], timeout: int) -> dict[str, Any]
 
 
 def fetch_hackerone_programs(timeout: int = 15) -> dict[str, Any]:
-    token = os.getenv("HACKERONE_API_TOKEN", "")
-    user = os.getenv("HACKERONE_API_USER", "")
+    token = read_secret("HACKERONE_API_TOKEN")
+    user = read_secret("HACKERONE_API_USER")
     if not token or not user:
         return {"enabled": False, "reason": "missing env HACKERONE_API_USER/HACKERONE_API_TOKEN"}
     import base64
@@ -27,9 +27,9 @@ def fetch_hackerone_programs(timeout: int = 15) -> dict[str, Any]:
 
 
 def fetch_hackerone_scopes(timeout: int = 15) -> dict[str, Any]:
-    token = os.getenv("HACKERONE_API_TOKEN", "")
-    user = os.getenv("HACKERONE_API_USER", "")
-    handle = os.getenv("HACKERONE_PROGRAM_HANDLE", "")
+    token = read_secret("HACKERONE_API_TOKEN")
+    user = read_secret("HACKERONE_API_USER")
+    handle = read_secret("HACKERONE_PROGRAM_HANDLE")
     if not token or not user or not handle:
         return {"enabled": False, "reason": "missing env for hackerone scope sync"}
     import base64
@@ -40,8 +40,8 @@ def fetch_hackerone_scopes(timeout: int = 15) -> dict[str, Any]:
 
 
 def fetch_hackerone_reports(timeout: int = 15) -> dict[str, Any]:
-    token = os.getenv("HACKERONE_API_TOKEN", "")
-    user = os.getenv("HACKERONE_API_USER", "")
+    token = read_secret("HACKERONE_API_TOKEN")
+    user = read_secret("HACKERONE_API_USER")
     if not token or not user:
         return {"enabled": False, "reason": "missing env for hackerone reports sync"}
     import base64
@@ -52,7 +52,7 @@ def fetch_hackerone_reports(timeout: int = 15) -> dict[str, Any]:
 
 
 def fetch_bugcrowd_programs(timeout: int = 15) -> dict[str, Any]:
-    token = os.getenv("BUGCROWD_API_TOKEN", "")
+    token = read_secret("BUGCROWD_API_TOKEN")
     if not token:
         return {"enabled": False, "reason": "missing env BUGCROWD_API_TOKEN"}
     headers = {"Authorization": f"Token {token}", "Accept": "application/json"}
@@ -61,8 +61,24 @@ def fetch_bugcrowd_programs(timeout: int = 15) -> dict[str, Any]:
 
 
 def fetch_bugcrowd_submissions(timeout: int = 15) -> dict[str, Any]:
-    token = os.getenv("BUGCROWD_API_TOKEN", "")
+    token = read_secret("BUGCROWD_API_TOKEN")
     if not token:
         return {"enabled": False, "reason": "missing env BUGCROWD_API_TOKEN"}
     headers = {"Authorization": f"Token {token}", "Accept": "application/json"}
     return _get_json("https://api.bugcrowd.com/submissions", headers=headers, timeout=timeout)
+
+
+def fetch_intigriti_programs(timeout: int = 15) -> dict[str, Any]:
+    token = read_secret("INTIGRITI_API_TOKEN")
+    if not token:
+        return {"enabled": False, "reason": "missing env INTIGRITI_API_TOKEN"}
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    return _get_json("https://api.intigriti.com/external/researcher/v1/programs?limit=200&offset=0", headers=headers, timeout=timeout)
+
+
+def fetch_intigriti_program_activities(timeout: int = 15) -> dict[str, Any]:
+    token = read_secret("INTIGRITI_API_TOKEN")
+    if not token:
+        return {"enabled": False, "reason": "missing env INTIGRITI_API_TOKEN"}
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    return _get_json("https://api.intigriti.com/external/researcher/v1/programs/activities?limit=200&offset=0", headers=headers, timeout=timeout)

@@ -42,6 +42,7 @@ class DiscordNotifierTests(unittest.IsolatedAsyncioTestCase):
                 "recon_webhook_url": "https://discord.local/recon",
                 "findings_webhook_url": "https://discord.local/findings",
                 "send_startup_check": False,
+                "findings_dedupe_persist_ttl_seconds": 0,
             },
             logger=_Logger(),
         )
@@ -82,6 +83,7 @@ class DiscordNotifierTests(unittest.IsolatedAsyncioTestCase):
                 "recon_webhook_url": "https://discord.local/recon",
                 "findings_webhook_url": "https://discord.local/findings",
                 "send_startup_check": True,
+                "findings_dedupe_persist_ttl_seconds": 0,
             },
             logger=_Logger(),
         )

@@ -1,8 +1,5 @@
-api.robinhood.com
-cashier.robinhood.com
-status.bitstamp.net
-www.bitstamp.net
-www.tradepmr.com
-identi.robinhood.com
-minerva.robinhood.com
-nummus.robinhood.com
+payment.backend-capital.com
+open-api.capital.com
+backend-capital.com
+capital.com
+itcapital.io

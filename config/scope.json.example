@@ -1,0 +1,9 @@
+{
+  "targets": ["*.example.com"],
+  "authorized_by": "Security Team",
+  "valid_from": "2026-03-10T00:00:00Z",
+  "valid_to": "2026-04-10T00:00:00Z",
+  "rules_of_engagement": "Automated scanning is permitted under rate limits.",
+  "signature_meta": {"algorithm": "hmac-sha256"},
+  "signature": "<signature>"
+}

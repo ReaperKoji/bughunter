@@ -1,0 +1,38 @@
+{
+  "endpoint": "https://webwsp.aps.kuleuven.be/sap/opu/odata/sap/ZC_AD_APPLICANT_SRV/$batch?sap-client=200",
+  "boundary": "batch_b529-ec05-8dd1",
+  "cookie_a_len": 2967,
+  "cookie_b_len": 2573,
+  "matrix": [
+    {
+      "actor": "A",
+      "status": 202,
+      "csrf_present": false,
+      "content_type": "multipart/mixed; boundary=BE9AA66A2025785FEBB0D31C02A059C00",
+      "login_like": false,
+      "inner_statuses": [],
+      "sha16": "a25a04526a54df7e"
+    },
+    {
+      "actor": "B",
+      "status": 202,
+      "csrf_present": false,
+      "content_type": "multipart/mixed; boundary=02058F2645C42EC0BF07C50DCD497FAD0",
+      "login_like": false,
+      "inner_statuses": [],
+      "sha16": "462f148983afbfbd"
+    },
+    {
+      "actor": "ANON",
+      "status": 200,
+      "csrf_present": false,
+      "content_type": "text/html; charset=utf-8",
+      "login_like": true,
+      "inner_statuses": [],
+      "sha16": "fc41b404a11e3c51"
+    }
+  ],
+  "a_b_same_body": false,
+  "a_b_same_inner_statuses": true,
+  "notes": "No differential signal in this batch replay."
+}

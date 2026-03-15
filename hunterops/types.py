@@ -9,6 +9,7 @@ class Task:
     plugin: str
     target: str
     payload: dict[str, Any] = field(default_factory=dict)
+    task_id: str = ""
 
 
 @dataclass
@@ -20,4 +21,3 @@ class Finding:
     title: str
     evidence: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
-

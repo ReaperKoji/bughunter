@@ -1,0 +1,161 @@
+version: 1
+pipeline:
+  name: lab-attack
+  description: Pipeline for local lab validation (Juice Shop / DVWA)
+
+  globals:
+    timeouts:
+      connect_s: 5
+      read_s: 10
+      total_s: 20
+      tool_s: 40
+    http_limits:
+      rate_per_sec: 10
+      max_inflight: 10
+    retry:
+      max_attempts: 1
+      backoff_base_s: 1
+      backoff_max_s: 10
+      jitter: 0.2
+    circuit_breaker:
+      failure_threshold: 3
+      half_open_after_s: 120
+    politeness:
+      per_host_rpm: 20
+      per_target_rpm: 10
+      concurrency_per_host: 1
+      jitter_ms: [200, 600]
+      stealth_mode: false
+    validator:
+      heuristics:
+        require_two_signals: true
+        min_confidence: 0.70
+        min_body_diff_ratio: 0.20
+        max_body_diff_ratio: 0.90
+        min_json_key_diff_ratio: 0.20
+        min_sensitivity_score: 0.55
+        baseline_score_threshold: 0.45
+      llm:
+        provider_order: [ollama, llamacpp, openai]
+        timeout_s: 15
+        max_tokens: 384
+        require_rationale: true
+      replay:
+        attempts: 1
+        require_signal_match: true
+    baseline:
+      enabled: true
+      timeout_s: 10
+      methods:
+        - method: GET
+        - method: POST
+          body: {"ping": "1"}
+        - method: PUT
+          body: {"ping": "1"}
+
+  policy_defaults:
+    per_host_rpm: 20
+    per_target_rpm: 10
+    concurrency_per_host: 1
+    allowed_hours: ["00:00-23:59"]
+    timezone: "UTC"
+    blocked_paths: ["/checkout", "/payment", "/kyc", "/billing"]
+
+  go_no_go:
+    require_signed_scope: false
+    allow_env_targets: true
+    require_roe: false
+    require_authorized_by: false
+    require_sessions_if_auth: true
+    report_path: reports/go_no_go_lab.json
+    report_md_path: reports/go_no_go_lab.md
+
+  runbook:
+    enabled: false
+
+  storage:
+    enabled: false
+    dsn_env: HUNTEROPS_POSTGRES_DSN
+
+  alerting:
+    enabled: false
+
+  metrics:
+    enabled: false
+    port: 9108
+    throughput_baseline_tph: 20
+    fp_alert_threshold: 0.5
+    error_alert_threshold: 0.3
+
+  endpoint_policies:
+    default:
+      block: []
+      allow: []
+
+  target_sources:
+    - type: file
+      path: data/targets/lab_targets.txt
+
+  chain:
+    order: [xss, sqli, ssti, lfi]
+    strategy: adaptive
+    rotate: true
+    rotate_on: run+target
+    adaptive_min_score: 0.2
+    max_modules_per_target: 0
+    shuffle_ties: true
+    fallback_on: [no_poc, false_positive, inconclusive, timeout]
+    emit_poc_on: [poc_valid]
+
+  owasp:
+    relevant: [A03:2021]
+
+  modules:
+    xss:
+      enabled: true
+      module: xss
+      timeout_s: 15
+      retries: 0
+      owasp: [A03:2021]
+      safe_payloads_only: true
+
+    sqli:
+      enabled: true
+      module: sqli
+      timeout_s: 20
+      retries: 0
+      owasp: [A03:2021]
+      safe_payloads_only: true
+
+    ssti:
+      enabled: true
+      module: ssti
+      timeout_s: 15
+      retries: 0
+      owasp: [A03:2021]
+      safe_payloads_only: true
+
+    lfi:
+      enabled: true
+      module: lfi
+      timeout_s: 15
+      retries: 0
+      owasp: [A03:2021]
+      safe_payloads_only: true
+
+  outputs:
+    events_path: data/events/lab_events.ndjson
+    evidence_path: data/evidence/
+    reports_path: reports/
+    metrics_path: data/metrics/
+
+  hot_reload:
+    nuclei_templates_path: data/nuclei-templates/
+    wordlists_path: data/wordlists/
+    poll_interval_s: 600
+
+  session_guardian:
+    enabled: false
+
+  impact_validator:
+    enabled: false

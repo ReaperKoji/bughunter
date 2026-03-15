@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from hunterops.runtime_paths import ensure_directory, resolve_path
+from hunterops.secrets import read_secret
 from hunterops.types import Finding
 
 
@@ -109,10 +109,10 @@ class ReportEngine:
         }
 
     def _identifier(self) -> str:
-        return os.getenv(self.identifier_env, "").strip() or "reaperk0ji"
+        return read_secret(self.identifier_env) or "reaperk0ji"
 
     def _token(self) -> str:
-        return os.getenv(self.token_env, "").strip()
+        return read_secret(self.token_env)
 
     def _enrich_curl(self, curl_cmd: str) -> str:
         cmd = str(curl_cmd or "").strip()

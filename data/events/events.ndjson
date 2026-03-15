@@ -1,0 +1,4 @@
+{"event": "preflight_failed", "reason": "unauthorized_targets", "unauthorized": ["https://open-api.capital.com/"]}
+{"event": "preflight_failed", "reason": "unauthorized_targets", "unauthorized": ["https://open-api.capital.com/", "https://open-api.capital.com/api", "https://open-api.capital.com/graphql"]}
+{"event": "preflight_failed", "reason": "unauthorized_targets", "unauthorized": ["https://payment.backend-capital.com/", "https://payment.backend-capital.com/api", "https://payment.backend-capital.com/graphql"]}
+{"event": "preflight_failed", "reason": "unauthorized_targets", "unauthorized": ["https://payment.backend-capital.com/", "https://payment.backend-capital.com//health", "https://payment.backend-capital.com//status"]}

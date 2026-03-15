@@ -1,0 +1,121 @@
+version: "3.9"
+
+x-security: &security
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp
+  pids_limit: 256
+
+services:
+  orchestrator:
+    image: hunterops/orchestrator:latest
+    container_name: hunterops-orchestrator
+    env_file:
+      - ../.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - RABBITMQ_URL=amqp://rabbitmq:5672
+      - POSTGRES_URL=postgresql://hunterops:hunterops@postgres:5432/hunterops
+      - NUCLEI_TEMPLATES=/data/nuclei-templates
+      - WORDLISTS=/data/wordlists
+    volumes:
+      - ../data:/data
+      - ../reports:/reports
+    depends_on:
+      - redis
+      - rabbitmq
+      - postgres
+    restart: unless-stopped
+    init: true
+    <<: *security
+
+  worker:
+    image: hunterops/worker:latest
+    env_file:
+      - ../.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - RABBITMQ_URL=amqp://rabbitmq:5672
+      - POSTGRES_URL=postgresql://hunterops:hunterops@postgres:5432/hunterops
+      - NUCLEI_TEMPLATES=/data/nuclei-templates
+      - WORDLISTS=/data/wordlists
+    volumes:
+      - ../data:/data
+      - ../reports:/reports
+    depends_on:
+      - redis
+      - rabbitmq
+      - postgres
+    restart: unless-stopped
+    init: true
+    <<: *security
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1024M
+
+  template-updater:
+    image: projectdiscovery/nuclei:latest
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["while true; do nuclei -update-templates -ut /data/nuclei-templates; sleep 21600; done"]
+    volumes:
+      - ../data:/data
+    restart: unless-stopped
+    init: true
+    <<: *security
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=hunterops
+      - POSTGRES_USER=hunterops
+      - POSTGRES_PASSWORD=hunterops
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ../ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../ops/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    volumes:
+      - ../ops/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  rabbitmq_data:
+  postgres_data:

@@ -1,63 +1,101 @@
 programs:
-  - name: robinhood-markets-bounty
-    platform: hackerone
+  - name: admissions-for-students
+    platform: intigriti
+    kyc_required: false
+    rules_of_engagement: "Automated tooling allowed only within stated program limits."
     in_scope:
-      - "*.rhinternal.net"
-      - "*.robinhood.com"
-      - "*.robinhood.net"
-      - "*.say.rocks"
-      - "*.saytechnologies.com"
-      - "api.robinhood.com"
-      - "cashier.robinhood.com"
-      - "minerva.robinhood.com"
-      - "nummus.robinhood.com"
-      - "identi.robinhood.com"
-      - "fusion.tradepmr.com"
-      - "www.tradepmr.com"
-      - "insight2.tradepmr.com"
-      - "www.bitstamp.net"
-      - "7671800.bitstamp.net"
-      - "7671800.team.bitstamp.net"
-      - "_16928ca3f53f40a48a751be40fa24e4c.bitstamp.net"
-      - "_domainconnect.bitstamp.net"
-      - "autodiscover.bitstamp.net"
-      - "bounces.bitstamp.net"
-      - "em1198.bitstamp.net"
-      - "em4296.team.bitstamp.net"
-      - "em9457.team.bitstamp.net"
-      - "enterpriseenrollment.bitstamp.net"
-      - "enterpriseregistration.bitstamp.net"
-      - "status.bitstamp.net"
-      - "url6884.team.bitstamp.net"
+      - "webwsp.aps.kuleuven.be"
     out_of_scope:
-      - "affiliates.robinhood.com"
-      - "api-sandbox.tradepmr.com"
-      - "api-validation.tradepmr.com"
-      - "api.tradepmr.com"
-      - "auth-sandbox.tradepmr.com"
-      - "auth-validation.tradepmr.com"
-      - "auth.tradepmr.com"
-      - "careers.robinhood.com"
-      - "content.research.robinhood.com"
-      - "earlytalent.robinhood.com"
-      - "esg.robinhood.com"
-      - "events.robinhood.com"
-      - "fleet.infra.robinhood.net"
-      - "fusion-demo.tradepmr.com"
-      - "fusion-demo.uat.tradepmr.com"
-      - "fusion-demo.uat2.tradepmr.com"
-      - "fusion.uat.tradepmr.com"
-      - "fusion.uat2.tradepmr.com"
-      - "fusion.uat3.tradepmr.com"
-      - "go.robinhood.com"
-      - "press.robinhood.com"
-      - "roadshow.robinhood.com"
-      - "sandbox.bitstamp.net"
-      - "share.robinhood.com"
-      - "shop.robinhood.com"
-      - "startinvesting.robinhood.com"
-      - "underthehoodpod.robinhood.com"
-      - "vgs-api.robinhood.com"
-      - "weareallinvestors.robinhood.com"
-      - "www.saytechnologies.com"
-    notes: "Imported from HackerOne scope CSV and Burp config export dated 2026-03-06; keep path-level exclusion for https://www.saytechnologies.com/contact/sales"
+      - "www.kuleuven.be"
+      - "idp.kuleuven.be"
+      - "account.kuleuven.be"
+      - "secure.ogone.com"
+    per_host_rpm: 30
+    per_target_rpm: 15
+    concurrency_per_host: 1
+    allowed_hours:
+      - "08:00-20:00"
+    timezone: "Europe/Brussels"
+    allow_internal: false
+    allowed_modules:
+      - idor
+      - sqli
+      - ssti
+      - xss
+      - lfi
+    blocked_modules:
+      - rce
+    blocked_paths:
+      - "/checkout"
+      - "/payment"
+      - "/kyc"
+    notes: "Intigriti program: Admissions for Students (KU Leuven). Restrict scanning to Admissions application host only."
+  - name: capital-com
+    platform: intigriti
+    kyc_required: false
+    rules_of_engagement: "Automated tooling allowed up to 10 requests/sec. Respect scope and required headers."
+    required_headers:
+      X-Intigriti-Username: "${HUNTEROPS_BUG_BOUNTY_USERNAME}"
+    in_scope:
+      - "payment.backend-capital.com"
+      - "*.backend-capital.com"
+      - "*.capital.com"
+      - "open-api.capital.com"
+    out_of_scope:
+      - "aff.capital.com"
+      - "go.capital.com"
+      - "register.capital.com"
+      - "careers.capital.com"
+      - "*.affiliates.backend-capital.com"
+      - "*.eduapp.backend-capital.com"
+      - "*.education.backend-capital.com"
+      - "help.capital.com"
+      - "relocate-with-us.capital.com"
+      - "3cxby.itcapital.io"
+      - "texis.itcapital.io"
+    per_host_rpm: 600
+    per_target_rpm: 300
+    concurrency_per_host: 2
+    allowed_hours:
+      - "00:00-23:59"
+    timezone: "UTC"
+    allow_internal: false
+    allowed_modules:
+      - idor
+      - bac_advanced
+      - sqli
+      - ssti
+      - xss
+      - lfi
+      - sensitive_misconfig
+      - ssrf_safe_probe
+      - info_leak
+    blocked_modules:
+      - rce
+      - open_redirect
+    blocked_paths:
+      - "/checkout"
+      - "/payment"
+      - "/kyc"
+      - "/billing"
+    notes: "Capital.com Intigriti program: focus on T1/T2 web assets; automation allowed at 10 rps max; manual validation required."
+  - name: mock-lab
+    platform: internal
+    kyc_required: false
+    in_scope:
+      - "localhost"
+      - "127.0.0.1"
+    out_of_scope: []
+    per_host_rpm: 60
+    per_target_rpm: 60
+    concurrency_per_host: 1
+    allowed_hours:
+      - "00:00-23:59"
+    timezone: "UTC"
+    allow_internal: true
+    allowed_modules:
+      - idor
+    blocked_modules: []
+    blocked_paths: []
+    rules_of_engagement: "Automation allowed for lab testing only."
+    notes: "Local mock program for E2E tests."

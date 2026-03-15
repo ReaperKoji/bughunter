@@ -24,11 +24,10 @@ class PluginImpl(Plugin):
                     plugin=self.name,
                     target=task.target,
                     category="subdomain_takeover",
-                    severity="high",
+                    severity="low",
                     title="Potential subdomain takeover signal",
-                    evidence={"sample": lines[:20], "command": cmd},
-                    metadata={"novelty": 80, "confidence": 65, "impact": 75},
+                    evidence={"sample": lines[:20], "command": cmd, "endpoint": "/"},
+                    metadata={"novelty": 80, "confidence": 74, "impact": 48},
                 )
             )
         return findings
-

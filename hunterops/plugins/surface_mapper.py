@@ -3,6 +3,7 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from hunterops.http_client import json_keys, request_http_async
+from hunterops.endpoint_cache import EndpointCache
 from hunterops.plugin_base import Plugin
 from hunterops.types import Finding, Task
 
@@ -37,11 +38,24 @@ class PluginImpl(Plugin):
             if isinstance(ep, str):
                 seeds.add(ep)
 
+        cache = context.get("endpoint_cache")
+        if isinstance(cache, EndpointCache):
+            filtered = set()
+            for ep in seeds:
+                if cache.was_seen(plugin=self.name, target=task.target, endpoint=ep):
+                    continue
+                filtered.add(ep)
+            if not filtered:
+                return []
+            seeds = filtered
+
         mapped: list[dict[str, object]] = []
         for p in sorted(seeds):
             url = p if p.startswith("http") else f"{base}{p}"
             r = await request_http_async("GET", url, headers={}, timeout=timeout)
             up = urlparse(url)
+            if isinstance(cache, EndpointCache):
+                cache.mark_seen(plugin=self.name, target=task.target, endpoint=up.path or "/")
             mapped.append(
                 {
                     "endpoint": up.path or "/",

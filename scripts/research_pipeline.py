@@ -6,16 +6,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import fnmatch
 import hashlib
 import json
 import logging
 import os
 import re
+import random
 import sys
 import time
 import traceback
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -32,9 +36,17 @@ from hunterops.env_utils import evaluate_runtime_dependencies, filter_enabled_pl
 from hunterops.evidence_generator import generate_research_artifacts
 from hunterops.hackerone_manager import HackerOneManager
 from hunterops.hackerone_sync_engine import HackerOneSyncEngine
-from hunterops.http_client import close_async_http_client, configure_http_pool, json_keys, request_http_async
+from hunterops.http_client import (
+    close_async_http_client,
+    configure_global_http_limits,
+    configure_http_pool,
+    json_keys,
+    request_http_async,
+)
 from hunterops.intelligence import dedupe_findings, serialize_findings, to_jsonl
+from hunterops.intigriti_manager import IntigritiManager
 from hunterops.logging_utils import attach_alert_router, setup_logging
+from hunterops.metrics import enable_metrics, write_metrics_snapshot
 from hunterops.oob_engine import OOBEngine
 from hunterops.plugin_loader import load_plugins
 from hunterops.program_packs import load_program_packs, resolve_pack
@@ -42,17 +54,172 @@ from hunterops.report_engine import ReportEngine
 from hunterops.rate_limit import AsyncRateLimiter
 from hunterops.reporting import export_csv, export_dashboard, export_html, export_json, export_markdown
 from hunterops.retry import retry_async
+from hunterops.shannon_adapter import ShannonAdapter, ShannonResult
 from hunterops.async_runtime import install_uvloop_if_available
+from hunterops.impact_validator import ImpactValidator
 from hunterops.runtime_paths import ensure_directory, resolve_path
+from hunterops.session_guardian import SessionGuardian
 from hunterops.session_profiles import auth_header, load_sessions
 from hunterops.storage import PostgresStorage
 from hunterops.types import Finding, Task
+from hunterops.scope_authorization import authorize_targets, load_authorized_scope
+from hunterops.target_governance import apply_target_governance
+from hunterops.attack_chain.scope import ScopePolicy, collect_scope, in_scope, load_programs
+from hunterops.rules_engine import check_automation_allowed
 
 EMAIL_RE = re.compile(r"""[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}""")
 UUID_RE = re.compile(r"""\b[0-9a-fA-F]{8}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{12}\b""")
 NUMERIC_ID_RE = re.compile(r"""\b[1-9][0-9]{2,18}\b""")
 SENSITIVE_PRIORITY_KEYWORDS = ("admin", "internal", "v1/debug", "config", "staging", "export", "graphiql")
 DEFAULT_PIPELINE_LOG = "data/pipeline.log"
+
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _policy_allows_now(policy: ScopePolicy) -> bool:
+    windows = policy.allowed_hours or []
+    if not windows:
+        return True
+    tz = policy.timezone or "UTC"
+    try:
+        now = datetime.now(ZoneInfo(tz))
+    except Exception:
+        now = datetime.now(ZoneInfo("UTC"))
+    current = now.time()
+    for window in windows:
+        raw = str(window or "").strip()
+        if "-" not in raw:
+            continue
+        start_s, end_s = [x.strip() for x in raw.split("-", 1)]
+        try:
+            start_h, start_m = [int(x) for x in start_s.split(":", 1)]
+            end_h, end_m = [int(x) for x in end_s.split(":", 1)]
+        except Exception:
+            continue
+        start = current.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+        end = current.replace(hour=end_h, minute=end_m, second=0, microsecond=0)
+        if start <= end:
+            if start <= current <= end:
+                return True
+        else:
+            if current >= start or current <= end:
+                return True
+    return False
+
+
+def _missing_required_headers(policy: ScopePolicy) -> list[str]:
+    missing: list[str] = []
+    if not isinstance(policy.required_headers, dict):
+        return missing
+    for key, value in policy.required_headers.items():
+        val = str(value or "").strip()
+        if not val:
+            missing.append(str(key))
+            continue
+        if val.startswith("${") and val.endswith("}"):
+            missing.append(str(key))
+    return missing
+
+
+def _policy_rps(policy: ScopePolicy) -> float:
+    rps: list[float] = []
+    if policy.per_host_rpm is not None and policy.per_host_rpm > 0:
+        rps.append(float(policy.per_host_rpm) / 60.0)
+    if policy.per_target_rpm is not None and policy.per_target_rpm > 0:
+        rps.append(float(policy.per_target_rpm) / 60.0)
+    if not rps:
+        return 0.0
+    return max(0.0, min(rps))
+
+
+def _warn_scope_expiry(scope_doc: dict[str, Any], logger: logging.Logger) -> None:
+    raw = str(scope_doc.get("valid_to", "")).strip()
+    if not raw:
+        return
+    try:
+        warn_days = float(os.getenv("HUNTEROPS_SCOPE_EXPIRY_WARN_DAYS", "0") or 0)
+    except Exception:
+        warn_days = 0.0
+    if warn_days <= 0:
+        return
+    try:
+        end = datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
+    except Exception:
+        return
+    remaining_days = (end - datetime.now(UTC)).total_seconds() / 86400.0
+    if remaining_days <= warn_days:
+        end_text = end.isoformat().replace("+00:00", "Z")
+        logger.warning(f"scope_expiring_soon days_remaining={remaining_days:.2f} valid_to={end_text}")
+
+
+def _finding_from_row(row: dict[str, Any]) -> Finding | None:
+    if not isinstance(row, dict):
+        return None
+    evidence = row.get("evidence", {})
+    if not isinstance(evidence, dict):
+        try:
+            evidence = json.loads(str(evidence))
+        except Exception:
+            evidence = {}
+    metadata = row.get("metadata", {})
+    if not isinstance(metadata, dict):
+        try:
+            metadata = json.loads(str(metadata))
+        except Exception:
+            metadata = {}
+    plugin = str(row.get("plugin", "") or "")
+    if not plugin:
+        plugin = str(metadata.get("plugin_source", "") or "")
+    target = str(row.get("target", "") or "")
+    category = str(row.get("category", "") or "")
+    severity = str(row.get("severity", "") or "")
+    if not severity:
+        severity = str(metadata.get("severity", "info") or "info")
+    title = str(row.get("title", "") or "")
+    if not title:
+        title = str(metadata.get("title", category or "finding") or "finding")
+    return Finding(
+        plugin=plugin,
+        target=target,
+        category=category,
+        severity=severity,
+        title=title,
+        evidence=evidence,
+        metadata=metadata,
+    )
+
+
+def _reload_findings_from_storage(
+    storage: PostgresStorage,
+    *,
+    run_id: str,
+    current: list[Finding],
+    logger: logging.Logger,
+) -> tuple[list[Finding], bool]:
+    try:
+        in_memory_before = len(current)
+        stored_rows = storage.fetch_run_findings_all(run_id)
+        reloaded: list[Finding] = []
+        for row in stored_rows:
+            item = _finding_from_row(row)
+            if item:
+                reloaded.append(item)
+        if current:
+            reloaded.extend(current)
+        logger.info(
+            "research_findings_reload "
+            f"storage_rows={len(stored_rows)} in_memory_before={in_memory_before} merged_total={len(reloaded)}"
+        )
+        return reloaded, True
+    except Exception as err:
+        logger.error(f"research_findings_reload_failed err={err}")
+        return current, False
 
 
 def parse_args() -> argparse.Namespace:
@@ -215,12 +382,48 @@ def _validate_config_structure(cfg: dict[str, Any]) -> list[str]:
                 if not raw:
                     errors.append(f"missing_config_key path=modules.hackerone_manager.{key}")
 
+        intigriti_manager = modules.get("intigriti_manager", {})
+        if isinstance(intigriti_manager, dict) and bool(intigriti_manager.get("enabled", False)):
+            for key in ("api_token_env",):
+                raw = str(intigriti_manager.get(key, "")).strip()
+                if not raw:
+                    errors.append(f"missing_config_key path=modules.intigriti_manager.{key}")
+            for key in ("include_hosts", "exclude_hosts", "program_handles"):
+                raw_list = intigriti_manager.get(key, [])
+                if raw_list is None:
+                    continue
+                if not isinstance(raw_list, list):
+                    errors.append(f"invalid_config_type path=modules.intigriti_manager.{key} expected=list")
+
         report_engine = modules.get("report_engine", {})
         if isinstance(report_engine, dict) and bool(report_engine.get("auto_submit_h1_draft", False)):
             for key in ("identifier_env", "token_env"):
                 raw = str(report_engine.get(key, "")).strip()
                 if not raw:
                     errors.append(f"missing_config_key path=modules.report_engine.{key}")
+
+        shannon_validator = modules.get("shannon_validator", {})
+        if isinstance(shannon_validator, dict) and bool(shannon_validator.get("enabled", False)):
+            binary_path = str(shannon_validator.get("binary_path", "")).strip()
+            if not binary_path:
+                errors.append("missing_config_key path=modules.shannon_validator.binary_path")
+            thresholds = shannon_validator.get("thresholds", {})
+            if not isinstance(thresholds, dict):
+                errors.append("invalid_config_type path=modules.shannon_validator.thresholds expected=dict")
+            else:
+                min_severity = str(thresholds.get("min_severity", "")).strip().lower()
+                if min_severity not in {"low", "medium", "high", "critical"}:
+                    errors.append("invalid_config_value path=modules.shannon_validator.thresholds.min_severity expected=low|medium|high|critical")
+                for key in ("min_confidence", "min_impact"):
+                    with contextlib.suppress(Exception):
+                        float(thresholds.get(key, 0))
+                        continue
+                    errors.append(f"invalid_config_value path=modules.shannon_validator.thresholds.{key} expected=float")
+            for key in ("timeout_seconds", "max_candidates_per_run"):
+                with contextlib.suppress(Exception):
+                    int(shannon_validator.get(key, 0))
+                    continue
+                errors.append(f"invalid_config_value path=modules.shannon_validator.{key} expected=int")
 
     return errors
 
@@ -259,6 +462,12 @@ def _validate_config_env(cfg: dict[str, Any]) -> tuple[list[str], list[str]]:
         has_single = bool(str(os.getenv("HACKERONE_PROGRAM_HANDLE", "")).strip())
         if not has_handles and not has_single:
             errors.append("missing_required_value path=modules.hackerone_manager.program_handles_or_env:HACKERONE_PROGRAM_HANDLE")
+
+    intigriti_manager_cfg = modules.get("intigriti_manager", {})
+    if isinstance(intigriti_manager_cfg, dict) and bool(intigriti_manager_cfg.get("enabled", False)):
+        token_env = str(intigriti_manager_cfg.get("api_token_env", "INTIGRITI_API_TOKEN")).strip() or "INTIGRITI_API_TOKEN"
+        if not str(os.getenv(token_env, "")).strip():
+            errors.append(f"missing_required_env env={token_env} reason=intigriti_manager_enabled")
 
     report_engine_cfg = modules.get("report_engine", {})
     if isinstance(report_engine_cfg, dict) and bool(report_engine_cfg.get("auto_submit_h1_draft", False)):
@@ -567,14 +776,48 @@ def _semantic_structure_similarity(text_a: str, text_b: str) -> float:
     return round((len(ta & tb) / max(1, len(ta | tb))) * 100.0, 2)
 
 
-def _spawn_tasks_from_findings(findings: list[Finding], max_depth: int = 2) -> list[Task]:
+def _extract_endpoints_from_finding(finding: Finding) -> list[str]:
+    endpoints: list[str] = []
+    for source in (finding.evidence if isinstance(finding.evidence, dict) else {}, finding.metadata if isinstance(finding.metadata, dict) else {}):
+        for key in ("endpoints", "known_endpoints", "seed_paths", "paths"):
+            vals = source.get(key, [])
+            if isinstance(vals, list):
+                endpoints.extend([str(v) for v in vals if isinstance(v, str)])
+        req = source.get("request", {}) if isinstance(source.get("request"), dict) else {}
+        req_url = req.get("url")
+        if isinstance(req_url, str) and req_url.strip():
+            endpoints.append(req_url)
+        for key in ("endpoint", "path", "url", "base_url", "modified_url"):
+            raw = source.get(key)
+            if isinstance(raw, str) and raw.strip():
+                endpoints.append(raw)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for ep in endpoints:
+        norm = _normalize_endpoint_key(ep)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        normalized.append(norm)
+    return sorted(normalized)
+
+
+def _spawn_tasks_from_findings(
+    findings: list[Finding],
+    *,
+    max_depth: int = 2,
+    attack_chain_seed_enabled: bool = False,
+    attack_chain_seed_available: bool = False,
+    attack_chain_seed_max_endpoints: int = 80,
+) -> list[Task]:
     spawned: list[Task] = []
     dedupe: set[str] = set()
+    seed_groups: dict[tuple[str, str], list[str]] = {}
     for f in findings:
         meta = f.metadata if isinstance(f.metadata, dict) else {}
         raw = meta.get("spawn_tasks", [])
         if not isinstance(raw, list):
-            continue
+            raw = []
         for item in raw:
             if not isinstance(item, dict):
                 continue
@@ -592,7 +835,59 @@ def _spawn_tasks_from_findings(findings: list[Finding], max_depth: int = 2) -> l
                 continue
             dedupe.add(sig)
             spawned.append(Task(plugin=plugin, target=target, payload=payload_dict))
+        if attack_chain_seed_enabled and attack_chain_seed_available:
+            endpoints = _extract_endpoints_from_finding(f)
+            if endpoints:
+                program_id = str(meta.get("program", meta.get("program_id", "")) or "").strip()
+                key = (str(f.target), program_id)
+                seed_groups.setdefault(key, []).extend(endpoints)
+    if attack_chain_seed_enabled and attack_chain_seed_available and seed_groups:
+        max_seed = max(1, int(attack_chain_seed_max_endpoints))
+        for (target, program_id), endpoints in seed_groups.items():
+            uniq: list[str] = []
+            seen_ep: set[str] = set()
+            for ep in endpoints:
+                norm = _normalize_endpoint_key(ep)
+                if not norm or norm in seen_ep:
+                    continue
+                seen_ep.add(norm)
+                uniq.append(norm)
+                if len(uniq) >= max_seed:
+                    break
+            if not uniq:
+                continue
+            payload_dict = {"endpoints": uniq[:max_seed], "program_id": program_id}
+            sig = f"attack_chain_seed|{target}|{json.dumps(payload_dict, sort_keys=True, ensure_ascii=True)}"
+            if sig in dedupe:
+                continue
+            dedupe.add(sig)
+            spawned.append(Task(plugin="attack_chain_seed", target=target, payload=payload_dict))
     return spawned
+
+
+def _dynamic_recursion_depth_for_round(*, base_depth: int, target: str, findings: list[Finding]) -> int:
+    depth = max(1, int(base_depth))
+    max_extra = max(1, int(base_depth)) + 3
+    max_conf = 0.0
+    critical_signal = False
+    for finding in findings:
+        max_conf = max(max_conf, _finding_confidence_value(finding))
+        cat = str(finding.category or "").strip().lower()
+        if cat in {
+            "confirmed_idor_bac",
+            "critical_public_data_exposure",
+            "critical_financial_idor_bac",
+        }:
+            critical_signal = True
+    target_l = str(target or "").strip().lower()
+    if target_l.endswith("backend-capital.com"):
+        if max_conf >= 95.0:
+            depth += 2
+        elif max_conf >= 85.0:
+            depth += 1
+    if critical_signal:
+        depth += 1
+    return max(1, min(depth, max_extra))
 
 
 async def _run_report_engine_if_high_critical(
@@ -658,23 +953,146 @@ def _is_unknown_endpoint(endpoint: str) -> bool:
     return normalized in {"unknown", "/unknown", ""}
 
 
+def _is_root_endpoint(endpoint: str) -> bool:
+    normalized = str(endpoint or "").strip().lower()
+    return normalized == "/"
+
+
+def _has_concrete_endpoint(items: Any) -> bool:
+    if not isinstance(items, list):
+        return False
+    for raw in items:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        if value.startswith("http://") or value.startswith("https://"):
+            value = urlparse(value).path or "/"
+        value = value.strip()
+        if value and value.lower() not in {"/", "/unknown", "unknown"}:
+            return True
+    return False
+
+
+def _is_low_quality_js_leak_finding(finding: Finding) -> bool:
+    plugin = str(finding.plugin or "").strip().lower()
+    category = str(finding.category or "").strip().lower()
+    title = str(finding.title or "").strip().lower()
+    evidence = finding.evidence if isinstance(finding.evidence, dict) else {}
+    metadata = finding.metadata if isinstance(finding.metadata, dict) else {}
+
+    if plugin == "deep_js_intelligence" and category == "js_information_leak":
+        if "across 0 endpoints" in title:
+            return True
+        endpoints = evidence.get("endpoints", [])
+        if _has_concrete_endpoint(endpoints):
+            return False
+        req_samples = evidence.get("request_response_sample", [])
+        if isinstance(req_samples, list):
+            for sample in req_samples:
+                if not isinstance(sample, dict):
+                    continue
+                request = sample.get("request", {})
+                if not isinstance(request, dict):
+                    continue
+                url = str(request.get("url", "")).strip()
+                if not url:
+                    continue
+                parsed = urlparse(url)
+                path = (parsed.path or "/").strip()
+                if path.lower() not in {"", "/", "/unknown", "unknown"}:
+                    return False
+        return True
+
+    if plugin == "report_synthesis":
+        source_plugin = str(metadata.get("plugin_source", "")).strip().lower()
+        endpoint = _finding_source_endpoint(finding)
+        if source_plugin == "deep_js_intelligence" and endpoint in {"/", "/unknown", "unknown", ""}:
+            return True
+
+    return False
+
+
+def _is_finding_actionable_for_triage(
+    finding: Finding,
+    triage_cfg: dict[str, Any] | None = None,
+) -> bool:
+    if _is_low_quality_js_leak_finding(finding):
+        return False
+    cfg = triage_cfg if isinstance(triage_cfg, dict) else {}
+    min_severity = str(cfg.get("actionable_min_severity", "high")).strip().lower() or "high"
+    min_confidence = float(cfg.get("actionable_min_confidence", 80.0) or 80.0)
+    min_impact = float(cfg.get("actionable_min_impact", 70.0) or 70.0)
+    require_known_endpoint = bool(cfg.get("actionable_require_known_endpoint", True))
+    disallow_root_endpoint = bool(cfg.get("actionable_disallow_root_endpoint", False))
+    allow_correlation_submission = bool(cfg.get("allow_correlation_submission", False))
+    fastlane_low_medium = bool(cfg.get("fastlane_low_medium", True))
+    fastlane_categories = [
+        str(x).strip().lower()
+        for x in cfg.get(
+            "fastlane_categories",
+            [
+                "information_disclosure",
+                "info_leak",
+                "open_redirect",
+                "cors",
+                "misconfiguration",
+                "source_map",
+                "path_disclosure",
+                "idor_response_discrepancy",
+            ],
+        )
+        if str(x).strip()
+    ]
+
+    endpoint = _finding_source_endpoint(finding)
+    confidence = _finding_confidence_value(finding)
+    impact = _finding_impact_value(finding)
+    severity_ok = _severity_rank(finding.severity) >= _severity_rank(min_severity)
+    confidence_ok = confidence >= min_confidence
+    impact_ok = impact >= min_impact
+    endpoint_ok = (not require_known_endpoint) or (not _is_unknown_endpoint(endpoint))
+    if disallow_root_endpoint and _is_root_endpoint(endpoint):
+        endpoint_ok = False
+    correlation_ok = allow_correlation_submission or finding.plugin != "vulnerability_correlation_engine"
+
+    if fastlane_low_medium and endpoint_ok and correlation_ok:
+        category_text = f"{str(finding.category or '').lower()} {str(finding.title or '').lower()}"
+        if _severity_rank(finding.severity) >= _severity_rank("low") and any(marker in category_text for marker in fastlane_categories):
+            return True
+
+    return bool(severity_ok and confidence_ok and impact_ok and endpoint_ok and correlation_ok)
+
+
 def _should_alert_router_dispatch(finding: Finding, triage_cfg: dict[str, Any] | None = None) -> bool:
     cfg = triage_cfg if isinstance(triage_cfg, dict) else {}
+    require_actionable = bool(cfg.get("alert_require_actionable", False))
     min_severity = str(cfg.get("alert_min_severity", cfg.get("actionable_min_severity", "high"))).strip().lower() or "high"
     min_confidence = float(cfg.get("alert_min_confidence", cfg.get("actionable_min_confidence", 80.0)) or 80.0)
     require_known_endpoint = bool(cfg.get("alert_require_known_endpoint", True))
+    disallow_root_endpoint = bool(cfg.get("alert_disallow_root_endpoint", False))
     allow_correlation_alerts = bool(cfg.get("allow_correlation_alerts", False))
     correlation_min_confidence = float(cfg.get("correlation_min_confidence", max(85.0, min_confidence)) or max(85.0, min_confidence))
 
-    if _severity_rank(finding.severity) < _severity_rank(min_severity):
+    sev_rank = _severity_rank(finding.severity)
+    if sev_rank < _severity_rank(min_severity):
         return False
 
     confidence = _finding_confidence_value(finding)
     if confidence < min_confidence:
-        return False
+        metadata = finding.metadata if isinstance(finding.metadata, dict) else {}
+        evidence = finding.evidence if isinstance(finding.evidence, dict) else {}
+        has_explicit_confidence = any(
+            key in metadata or key in evidence
+            for key in ("confidence_score", "confidence")
+        )
+        # Keep alert routing resilient for critical findings without explicit confidence metadata.
+        if not (sev_rank >= _severity_rank("critical") and not has_explicit_confidence):
+            return False
 
     endpoint = _finding_source_endpoint(finding)
     if require_known_endpoint and _is_unknown_endpoint(endpoint):
+        return False
+    if disallow_root_endpoint and _is_root_endpoint(endpoint):
         return False
 
     if finding.plugin == "vulnerability_correlation_engine":
@@ -682,6 +1100,9 @@ def _should_alert_router_dispatch(finding: Finding, triage_cfg: dict[str, Any] |
             return False
         if confidence < correlation_min_confidence:
             return False
+
+    if require_actionable and not _is_finding_actionable_for_triage(finding, triage_cfg=cfg):
+        return False
 
     return True
 
@@ -691,29 +1112,214 @@ def split_findings_for_triage(
     triage_cfg: dict[str, Any] | None = None,
 ) -> tuple[list[Finding], list[Finding]]:
     cfg = triage_cfg if isinstance(triage_cfg, dict) else {}
-    min_severity = str(cfg.get("actionable_min_severity", "high")).strip().lower() or "high"
-    min_confidence = float(cfg.get("actionable_min_confidence", 80.0) or 80.0)
-    min_impact = float(cfg.get("actionable_min_impact", 70.0) or 70.0)
-    require_known_endpoint = bool(cfg.get("actionable_require_known_endpoint", True))
-    allow_correlation_submission = bool(cfg.get("allow_correlation_submission", False))
     actionable: list[Finding] = []
     review_queue: list[Finding] = []
 
     for finding in findings:
-        endpoint = _finding_source_endpoint(finding)
-        confidence = _finding_confidence_value(finding)
-        impact = _finding_impact_value(finding)
-        severity_ok = _severity_rank(finding.severity) >= _severity_rank(min_severity)
-        confidence_ok = confidence >= min_confidence
-        impact_ok = impact >= min_impact
-        endpoint_ok = (not require_known_endpoint) or (not _is_unknown_endpoint(endpoint))
-        correlation_ok = allow_correlation_submission or finding.plugin != "vulnerability_correlation_engine"
-
-        if severity_ok and confidence_ok and impact_ok and endpoint_ok and correlation_ok:
+        if _is_finding_actionable_for_triage(finding, triage_cfg=cfg):
             actionable.append(finding)
         else:
             review_queue.append(finding)
     return actionable, review_queue
+
+
+def _triage_row_key(row: dict[str, Any]) -> str:
+    evidence = row.get("evidence", {}) if isinstance(row.get("evidence"), dict) else {}
+    metadata = row.get("metadata", {}) if isinstance(row.get("metadata"), dict) else {}
+    endpoint = str(
+        row.get("endpoint", "")
+        or evidence.get("endpoint", "")
+        or evidence.get("path", "")
+        or evidence.get("url", "")
+        or ""
+    ).strip()
+    if endpoint.startswith("http://") or endpoint.startswith("https://"):
+        endpoint = urlparse(endpoint).path or "/"
+    elif endpoint and not endpoint.startswith("/"):
+        endpoint = f"/{endpoint}"
+    parameter_name = str(
+        row.get("parameter_name", "")
+        or metadata.get("parameter_name", metadata.get("parameter", ""))
+        or evidence.get("tested_parameter", "")
+    ).strip()
+    raw = "|".join(
+        [
+            str(row.get("plugin", "")).strip().lower(),
+            str(row.get("target", "")).strip().lower(),
+            str(row.get("category", "")).strip().lower(),
+            str(row.get("title", "")).strip().lower(),
+            endpoint.lower(),
+            parameter_name.lower(),
+        ]
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def persist_validated_candidates_outputs(
+    out_dir: Path,
+    *,
+    run_id: str,
+    rows: list[dict[str, Any]],
+) -> None:
+    triage_dir = ensure_directory(out_dir / "triage", mode=0o755)
+    export_json(triage_dir / "validated_candidates.json", rows)
+    (triage_dir / "validated_candidates.jsonl").write_text(to_jsonl(rows), encoding="utf-8")
+    export_markdown(triage_dir / "validated_candidates.md", rows, f"{run_id}-validated-candidates")
+
+
+async def _run_shannon_validation_stage(
+    *,
+    run_id: str,
+    cfg: dict[str, Any],
+    storage: PostgresStorage | None,
+    logger: Any,
+    out_dir: Path,
+    actionable_rows: list[dict[str, Any]],
+    review_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    modules_cfg = cfg.get("modules", {}) if isinstance(cfg.get("modules"), dict) else {}
+    shannon_cfg = modules_cfg.get("shannon_validator", {}) if isinstance(modules_cfg.get("shannon_validator"), dict) else {}
+    enabled = bool(shannon_cfg.get("enabled", False))
+    if not enabled:
+        persist_validated_candidates_outputs(out_dir, run_id=run_id, rows=[])
+        return actionable_rows, review_rows, []
+
+    if storage is None:
+        logger.warning("shannon_validation_skipped reason=storage_unavailable")
+        persist_validated_candidates_outputs(out_dir, run_id=run_id, rows=[])
+        return actionable_rows, review_rows, []
+
+    binary_path = str(shannon_cfg.get("binary_path", "/opt/shannon_ref/shannon")).strip()
+    timeout_seconds = float(shannon_cfg.get("timeout_seconds", 30) or 30)
+    max_candidates = max(1, int(shannon_cfg.get("max_candidates_per_run", 5) or 5))
+    thresholds = shannon_cfg.get("thresholds", {}) if isinstance(shannon_cfg.get("thresholds"), dict) else {}
+    min_confidence = float(thresholds.get("min_confidence", 75) or 75)
+    min_impact = float(thresholds.get("min_impact", 70) or 70)
+    min_severity = str(thresholds.get("min_severity", "medium")).strip().lower() or "medium"
+
+    adapter = ShannonAdapter(binary_path=binary_path, timeout_seconds=timeout_seconds)
+    try:
+        storage.upsert_triage_queue_rows(run_id=run_id, rows=actionable_rows, status="actionable")
+        storage.upsert_triage_queue_rows(run_id=run_id, rows=review_rows, status="review")
+        candidates = storage.list_triage_review_candidates(
+            run_id=run_id,
+            min_confidence=min_confidence,
+            min_impact=min_impact,
+            min_severity=min_severity,
+            limit=max_candidates,
+        )
+    except Exception as err:
+        logger.error(f"shannon_validation_failed stage=select_candidates err={err}")
+        persist_validated_candidates_outputs(out_dir, run_id=run_id, rows=[])
+        return actionable_rows, review_rows, []
+
+    if not candidates:
+        logger.info(
+            "shannon_validation_candidates_none "
+            f"min_severity={min_severity} min_confidence={min_confidence} min_impact={min_impact}"
+        )
+        persist_validated_candidates_outputs(out_dir, run_id=run_id, rows=[])
+        return actionable_rows, review_rows, []
+
+    promoted_keys: set[str] = set()
+    promoted_review_keys: set[str] = set()
+    promoted_rows: list[dict[str, Any]] = []
+    validated_rows: list[dict[str, Any]] = []
+
+    for item in candidates:
+        payload = item.get("payload", {}) if isinstance(item.get("payload"), dict) else {}
+        finding_key = str(item.get("finding_key", "")).strip()
+        target = str(item.get("target", payload.get("target", ""))).strip()
+        endpoint = str(item.get("endpoint", "")).strip()
+        if not endpoint:
+            evidence = payload.get("evidence", {}) if isinstance(payload.get("evidence"), dict) else {}
+            endpoint = str(evidence.get("endpoint", evidence.get("path", "/")) or "/").strip()
+        if endpoint.startswith("http://") or endpoint.startswith("https://"):
+            endpoint = urlparse(endpoint).path or "/"
+        elif endpoint and not endpoint.startswith("/"):
+            endpoint = f"/{endpoint}"
+        logger.info(f"shannon_validation_start target={target} endpoint={endpoint} finding_key={finding_key}")
+
+        result: ShannonResult = await adapter.validate(
+            {
+                "target": target,
+                "endpoint": endpoint,
+                "metadata": payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {},
+            }
+        )
+        exit_code = int(result.exit_code) if isinstance(result.exit_code, int) else -1
+        if result.validated:
+            try:
+                promoted = storage.promote_triage_candidate_with_validation(
+                    run_id=run_id,
+                    finding_key=finding_key,
+                    confidence_delta=float(result.confidence_delta or 0.0),
+                    evidence_path=str(result.evidence_path or ""),
+                    validator_note=str(result.error or ""),
+                )
+            except Exception as err:
+                promoted = False
+                result.error = f"promotion_error type={type(err).__name__} err={err}"
+            if promoted:
+                promoted_keys.add(finding_key)
+                promoted_payload = payload.copy()
+                md = promoted_payload.get("metadata", {}) if isinstance(promoted_payload.get("metadata"), dict) else {}
+                ev = promoted_payload.get("evidence", {}) if isinstance(promoted_payload.get("evidence"), dict) else {}
+                md = md.copy()
+                ev = ev.copy()
+                md["source"] = "shannon_validation"
+                md["confidence_delta"] = float(result.confidence_delta or 0.0)
+                if result.error:
+                    md["validator_note"] = str(result.error)
+                ev["evidence_path"] = str(result.evidence_path or "")
+                promoted_payload["metadata"] = md
+                promoted_payload["evidence"] = ev
+                promoted_rows.append(promoted_payload)
+                promoted_review_keys.add(_triage_row_key(promoted_payload))
+                validated_rows.append(
+                    {
+                        "plugin": str(promoted_payload.get("plugin", "")),
+                        "target": target,
+                        "category": str(promoted_payload.get("category", "")),
+                        "severity": str(promoted_payload.get("severity", "")),
+                        "title": str(promoted_payload.get("title", "")),
+                        "risk_score": float(promoted_payload.get("risk_score", 0) or 0),
+                        "evidence": {
+                            "endpoint": endpoint,
+                            "evidence_path": str(result.evidence_path or ""),
+                            "finding_key": finding_key,
+                            "confidence_delta": float(result.confidence_delta or 0.0),
+                            "exit_code": exit_code,
+                        },
+                    }
+                )
+                logger.info(f"shannon_validation_success target={target} endpoint={endpoint} finding_key={finding_key}")
+                continue
+
+        note = str(result.error or "validator_not_validated").strip() or "validator_not_validated"
+        with contextlib.suppress(Exception):
+            storage.mark_triage_candidate_validation_failed(
+                run_id=run_id,
+                finding_key=finding_key,
+                note=note,
+            )
+        logger.error(
+            f"shannon_validation_failed target={target} endpoint={endpoint} finding_key={finding_key} "
+            f"exit_code={exit_code} err={note}"
+        )
+
+    if promoted_rows:
+        existing_actionable_keys = {_triage_row_key(row) for row in actionable_rows if isinstance(row, dict)}
+        for row in promoted_rows:
+            key = _triage_row_key(row)
+            if key in existing_actionable_keys:
+                continue
+            actionable_rows.append(row)
+            existing_actionable_keys.add(key)
+        review_rows = [row for row in review_rows if _triage_row_key(row) not in promoted_review_keys]
+
+    persist_validated_candidates_outputs(out_dir, run_id=run_id, rows=validated_rows)
+    return actionable_rows, review_rows, validated_rows
 
 
 async def _route_alerts_from_batch(
@@ -879,6 +1485,26 @@ def _delta_score(delta: dict[str, Any]) -> float:
     return round(min(100.0, (new_endpoints * 22.0) + (changed_js * 16.0) + (new_parameters * 12.0)), 2)
 
 
+def _delta_has_high_value(delta: dict[str, Any], patterns: list[str]) -> bool:
+    if not patterns:
+        return False
+    endpoints = [str(x) for x in delta.get("new_endpoints", []) if isinstance(x, str)]
+    endpoints.extend([str(x) for x in delta.get("new_parameters", []) if isinstance(x, str)])
+    endpoints.extend([str(x) for x in delta.get("changed_js", []) if isinstance(x, str)])
+    for ep in endpoints:
+        if _endpoint_matches_any(_normalize_endpoint_key(ep), patterns):
+            return True
+    return False
+
+
+def _semantic_key(finding: Finding) -> tuple[str, str, str, str]:
+    target = str(finding.target or "").strip().lower()
+    category = str(finding.category or "").strip().lower()
+    title = str(finding.title or "").strip().lower()
+    endpoint = _normalize_endpoint_key(_finding_source_endpoint(finding)).lower()
+    return (target, category, title, endpoint)
+
+
 def _finding_confidence(finding: Finding) -> float:
     md = finding.metadata if isinstance(finding.metadata, dict) else {}
     return float(md.get("confidence_score", md.get("confidence", 0)) or 0)
@@ -966,6 +1592,31 @@ def _feedback_status_by_target(findings: list[Finding]) -> dict[str, set[int]]:
     return out
 
 
+def _feedback_status_by_target_window(findings: list[Finding], *, window_seconds: int = 120) -> dict[str, set[int]]:
+    tracked = {403, 429}
+    out: dict[str, set[int]] = {}
+    now = time.time()
+    for finding in findings:
+        evidence = finding.evidence if isinstance(finding.evidence, dict) else {}
+        ts = evidence.get("timestamp") or evidence.get("ts") or evidence.get("time")
+        ts_val = None
+        try:
+            if ts is not None:
+                ts_val = float(ts)
+        except Exception:
+            ts_val = None
+        if ts_val is not None and (now - ts_val) > window_seconds:
+            continue
+        statuses: set[int] = set()
+        _collect_status_codes(finding.evidence if isinstance(finding.evidence, dict) else {}, statuses)
+        _collect_status_codes(finding.metadata if isinstance(finding.metadata, dict) else {}, statuses)
+        hits = {status for status in statuses if status in tracked}
+        if not hits:
+            continue
+        out.setdefault(finding.target, set()).update(hits)
+    return out
+
+
 def _build_feedback_retry_tasks(
     *,
     current_wave: list[Task],
@@ -1025,6 +1676,73 @@ def _normalize_endpoint_key(raw: str) -> str:
     return path or "/"
 
 
+def _endpoint_is_noisy(path: str, patterns: list[str]) -> bool:
+    if not patterns:
+        return False
+    value = str(path or "").strip().lower()
+    if not value:
+        return False
+    for raw in patterns:
+        pat = str(raw or "").strip().lower()
+        if not pat:
+            continue
+        if pat.startswith("re:"):
+            try:
+                if re.search(pat[3:], value, re.IGNORECASE):
+                    return True
+            except Exception:
+                continue
+        elif "*" in pat or "?" in pat:
+            if fnmatch.fnmatch(value, pat):
+                return True
+        else:
+            if pat in value:
+                return True
+    return False
+
+
+def _endpoint_is_blocked(path: str, blocked: list[str]) -> bool:
+    if not blocked:
+        return False
+    value = str(path or "").strip().lower()
+    if not value:
+        return False
+    for raw in blocked:
+        token = str(raw or "").strip().lower()
+        if not token:
+            continue
+        if token in value:
+            return True
+    return False
+
+
+def _annotate_program_metadata(
+    findings: list[Finding],
+    program_by_target: dict[str, str],
+    programs_by_target: dict[str, list[str]],
+) -> None:
+    if not findings:
+        return
+    for finding in findings:
+        target = str(finding.target or "").strip()
+        if not target:
+            continue
+        program = program_by_target.get(target, "")
+        programs = programs_by_target.get(target, [])
+        if not program and not programs:
+            continue
+        meta = finding.metadata if isinstance(finding.metadata, dict) else {}
+        if program and not str(meta.get("program", "")).strip():
+            meta["program"] = program
+        if programs and not isinstance(meta.get("programs"), list):
+            meta["programs"] = programs
+        finding.metadata = meta
+
+
+def _endpoint_matches_any(path: str, patterns: list[str]) -> bool:
+    return _endpoint_is_noisy(path, patterns)
+
+
 def _auth_weight_from_finding(finding: Finding) -> float:
     evidence = finding.evidence if isinstance(finding.evidence, dict) else {}
     ra = evidence.get("response_auth_a", {}) if isinstance(evidence.get("response_auth_a"), dict) else {}
@@ -1043,8 +1761,44 @@ def _auth_weight_from_finding(finding: Finding) -> float:
 class HighValuePriorityQueue:
     """Ranks recursive tasks by Delta-first and entity cross-pollination confidence."""
 
-    def __init__(self, max_size: int = 4000) -> None:
+    def __init__(
+        self,
+        max_size: int = 4000,
+        priority_patterns: list[str] | None = None,
+        priority_boost: float = 0.0,
+        roi_patterns: list[str] | None = None,
+        roi_boost: float = 0.0,
+        roi_plugin_boosts: dict[str, float] | None = None,
+        roi_boost_cap: float = 0.0,
+    ) -> None:
         self.max_size = max(50, int(max_size))
+        self.priority_patterns = [str(x).strip() for x in (priority_patterns or []) if str(x).strip()]
+        self.priority_boost = float(priority_boost or 0.0)
+        self.roi_patterns = [str(x).strip() for x in (roi_patterns or []) if str(x).strip()]
+        self.roi_boost = float(roi_boost or 0.0)
+        self.roi_plugin_boosts = {
+            str(k).strip().lower(): float(v)
+            for k, v in (roi_plugin_boosts or {}).items()
+            if str(k).strip()
+        }
+        self.roi_boost_cap = float(roi_boost_cap or 0.0)
+
+    def _priority_boost_for_endpoint(self, endpoint: str) -> float:
+        if not self.priority_patterns or self.priority_boost <= 0:
+            return 0.0
+        if _endpoint_matches_any(endpoint, self.priority_patterns):
+            return self.priority_boost
+        return 0.0
+
+    def _roi_boost_for_task(self, endpoint: str, plugin: str) -> float:
+        boost = 0.0
+        if self.roi_patterns and self.roi_boost > 0 and _endpoint_matches_any(endpoint, self.roi_patterns):
+            boost += self.roi_boost
+        if self.roi_plugin_boosts:
+            boost += float(self.roi_plugin_boosts.get(str(plugin).strip().lower(), 0.0) or 0.0)
+        if self.roi_boost_cap > 0:
+            boost = min(boost, self.roi_boost_cap)
+        return boost
 
     @staticmethod
     def confidence_formula(delta_struct: float, auth_weight: float, leaked_entities: int, probes: int) -> float:
@@ -1132,16 +1886,19 @@ class HighValuePriorityQueue:
             if priority_class == 1 and queue_confidence < 90.0:
                 queue_confidence = 90.0
 
+            boost = self._priority_boost_for_endpoint(endpoint)
+            boost += self._roi_boost_for_task(endpoint, task.plugin)
             payload["priority_class"] = priority_class
             payload["queue_confidence"] = queue_confidence
-            payload["priority_score"] = max(payload_priority, queue_confidence)
+            payload["priority_boost"] = boost
+            payload["priority_score"] = max(payload_priority, queue_confidence) + boost
 
             ranked_task = Task(plugin=task.plugin, target=task.target, payload=payload)
             signature = f"{ranked_task.plugin}|{ranked_task.target}|{json.dumps(ranked_task.payload, sort_keys=True, ensure_ascii=True)}"
             if signature in dedupe:
                 continue
             dedupe.add(signature)
-            ranked.append((priority_class, -queue_confidence, -max(payload_priority, queue_confidence), ranked_task.plugin, ranked_task))
+            ranked.append((priority_class, -queue_confidence, -payload["priority_score"], ranked_task.plugin, ranked_task))
 
         ranked.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
         return [row[4] for row in ranked[: self.max_size]]
@@ -1151,6 +1908,14 @@ class HighValuePriorityQueue:
 class ResearchState:
     run_id: str
     storage: PostgresStorage | None
+    endpoint_cache_enabled: bool = False
+    endpoint_cache_ttl_seconds: int = 0
+    endpoint_noise_patterns: list[str] = None  # type: ignore[assignment]
+    blocked_paths_by_target: dict[str, list[str]] = None  # type: ignore[assignment]
+    allowed_plugins_by_target: dict[str, list[str]] = None  # type: ignore[assignment]
+    blocked_plugins_by_target: dict[str, list[str]] = None  # type: ignore[assignment]
+    endpoint_cache_max_entries: int = 0
+    endpoint_cache_local: dict[tuple[str, str, str], float] = None  # type: ignore[assignment]
 
     def was_scanned(self, plugin: str, target: str, endpoint: str) -> bool:
         if not self.storage:
@@ -1160,17 +1925,98 @@ class ResearchState:
         except Exception:
             return False
 
+    def was_recently_scanned(self, plugin: str, target: str, endpoint: str) -> bool:
+        if not self.storage:
+            return False
+        if not self.endpoint_cache_enabled or self.endpoint_cache_ttl_seconds <= 0:
+            return False
+        try:
+            return self.storage.endpoint_seen_recently(
+                plugin=plugin,
+                target=target,
+                endpoint=endpoint,
+                ttl_seconds=self.endpoint_cache_ttl_seconds,
+            )
+        except Exception:
+            return False
+
+    def _local_cache_key(self, plugin: str, target: str, endpoint: str) -> tuple[str, str, str]:
+        return (str(plugin), str(target), _normalize_endpoint_key(endpoint))
+
+    def _local_cache_prune(self, now: float) -> None:
+        if not self.endpoint_cache_local:
+            return
+        ttl = max(0, int(self.endpoint_cache_ttl_seconds))
+        if ttl > 0:
+            for key, ts in list(self.endpoint_cache_local.items()):
+                if (now - float(ts)) > ttl:
+                    self.endpoint_cache_local.pop(key, None)
+        if self.endpoint_cache_max_entries > 0 and len(self.endpoint_cache_local) > self.endpoint_cache_max_entries:
+            items = sorted(self.endpoint_cache_local.items(), key=lambda row: row[1])
+            for key, _ in items[: max(0, len(items) - self.endpoint_cache_max_entries)]:
+                self.endpoint_cache_local.pop(key, None)
+
+    def was_recently_scanned_local(self, plugin: str, target: str, endpoint: str) -> bool:
+        if not self.endpoint_cache_enabled or self.endpoint_cache_ttl_seconds <= 0:
+            return False
+        if not self.endpoint_cache_local:
+            return False
+        now = time.time()
+        self._local_cache_prune(now)
+        key = self._local_cache_key(plugin, target, endpoint)
+        ts = self.endpoint_cache_local.get(key)
+        if ts is None:
+            return False
+        return (now - float(ts)) <= self.endpoint_cache_ttl_seconds
+
+    def mark_scanned_local(self, plugin: str, target: str, endpoint: str) -> None:
+        if not self.endpoint_cache_enabled or self.endpoint_cache_ttl_seconds <= 0:
+            return
+        if self.endpoint_cache_local is None:
+            self.endpoint_cache_local = {}
+        now = time.time()
+        self._local_cache_prune(now)
+        key = self._local_cache_key(plugin, target, endpoint)
+        self.endpoint_cache_local[key] = now
+
     def mark_scanned(self, plugin: str, target: str, endpoint: str) -> None:
         if not self.storage:
             return
         try:
             self.storage.mark_endpoint_scanned(self.run_id, plugin, target, endpoint)
+            if self.endpoint_cache_enabled and self.endpoint_cache_ttl_seconds > 0:
+                self.storage.mark_endpoint_seen(plugin=plugin, target=target, endpoint=endpoint)
+                self.mark_scanned_local(plugin, target, endpoint)
         except Exception:
             return
 
     def filter_task(self, task: Task) -> Task | None:
+        plugin_name = str(task.plugin).strip().lower()
+        allow_map = self.allowed_plugins_by_target or {}
+        block_map = self.blocked_plugins_by_target or {}
+        allow_list = {str(x).strip().lower() for x in (allow_map.get(task.target, []) or []) if str(x).strip()}
+        block_list = {str(x).strip().lower() for x in (block_map.get(task.target, []) or []) if str(x).strip()}
+        if allow_list and plugin_name not in allow_list:
+            return None
+        if block_list and plugin_name in block_list:
+            return None
         endpoints = _task_endpoints(task)
-        remaining = [ep for ep in endpoints if not self.was_scanned(task.plugin, task.target, ep)]
+        patterns = self.endpoint_noise_patterns or []
+        blocked_paths = (self.blocked_paths_by_target or {}).get(task.target, []) or []
+        remaining: list[str] = []
+        for ep in endpoints:
+            normalized = _normalize_endpoint_key(ep)
+            if _endpoint_is_noisy(normalized, patterns):
+                continue
+            if _endpoint_is_blocked(normalized, blocked_paths):
+                continue
+            if self.was_scanned(task.plugin, task.target, ep):
+                continue
+            if self.was_recently_scanned_local(task.plugin, task.target, ep):
+                continue
+            if self.was_recently_scanned(task.plugin, task.target, ep):
+                continue
+            remaining.append(ep)
         if not remaining:
             return None
         payload = task.payload.copy() if isinstance(task.payload, dict) else {}
@@ -1740,6 +2586,18 @@ class ResearchScheduler:
         self._task_timeouts_by_target: dict[str, int] = {}
         self.feedback_streak_threshold = int(runtime.get("feedback_streak_threshold", 3))
         self.feedback_hard_pause_seconds = float(runtime.get("feedback_hard_pause_seconds", 60.0))
+        self.auto_mute_enabled = bool(runtime.get("auto_mute_enabled", True))
+        self.auto_mute_window_seconds = int(runtime.get("auto_mute_window_seconds", 120))
+        self.auto_mute_event_threshold = int(runtime.get("auto_mute_event_threshold", 6))
+        self.auto_mute_seconds = int(runtime.get("auto_mute_seconds", 900))
+        self._auto_mute_events: dict[str, list[float]] = {}
+        self._auto_mute_until: dict[str, float] = {}
+        self.per_target_inflight = max(1, int(runtime.get("per_target_inflight", 2) or 2))
+        self.per_target_jitter_ms = max(0, int(runtime.get("per_target_jitter_ms", 0) or 0))
+        self._target_semaphores: dict[str, asyncio.Semaphore] = {}
+        self._target_sem_lock = asyncio.Lock()
+        self.metrics_enabled = bool(runtime.get("plugin_metrics_enabled", True))
+        self._plugin_stats: dict[str, dict[str, float]] = defaultdict(lambda: {"calls": 0.0, "errors": 0.0, "latency_sum": 0.0})
         user_agents = runtime.get("user_agents", [])
         if not isinstance(user_agents, list) or not user_agents:
             user_agents = [
@@ -1771,6 +2629,13 @@ class ResearchScheduler:
         interval = 0.0 if rps <= 0 else 1.0 / max(0.1, rps)
         async with self._target_lock:
             now = time.monotonic()
+            if self.auto_mute_enabled:
+                mute_until = float(self._auto_mute_until.get(target, 0.0))
+                if mute_until > now:
+                    await asyncio.sleep(max(0.0, mute_until - now))
+                    now = time.monotonic()
+            if self.per_target_jitter_ms > 0:
+                await asyncio.sleep(random.uniform(0.0, float(self.per_target_jitter_ms) / 1000.0))
             next_allowed = float(self._target_next_allowed.get(target, now + interval))
             penalty_until = float(self._target_penalty_until.get(target, now))
             if penalty_until > next_allowed:
@@ -1780,10 +2645,26 @@ class ResearchScheduler:
                 now = time.monotonic()
             self._target_next_allowed[target] = now + interval
 
+    async def _get_target_semaphore(self, target: str) -> asyncio.Semaphore:
+        async with self._target_sem_lock:
+            sem = self._target_semaphores.get(target)
+            if sem is None:
+                sem = asyncio.Semaphore(self.per_target_inflight)
+                self._target_semaphores[target] = sem
+            return sem
+
     def register_feedback(self, target: str, status_code: int) -> None:
         if int(status_code) not in {403, 429}:
             self.clear_feedback(target)
             return
+        if self.auto_mute_enabled:
+            now = time.monotonic()
+            bucket = self._auto_mute_events.setdefault(target, [])
+            bucket.append(now)
+            window = max(10.0, float(self.auto_mute_window_seconds))
+            self._auto_mute_events[target] = [ts for ts in bucket if (now - ts) <= window]
+            if len(self._auto_mute_events[target]) >= max(1, int(self.auto_mute_event_threshold)):
+                self._auto_mute_until[target] = now + max(30.0, float(self.auto_mute_seconds))
         self._feedback_events_total += 1
         self._feedback_events_by_target[target] = int(self._feedback_events_by_target.get(target, 0) or 0) + 1
         count = int(self._feedback_counts.get(target, 0) or 0) + 1
@@ -1849,39 +2730,56 @@ class ResearchScheduler:
             self.logger.warning(f"plugin_not_loaded={filtered.plugin}")
             return []
         plugin = self.plugins[filtered.plugin]
-        await self.rate.wait()
-        await self._wait_target_budget(filtered.target)
-        async with self.semaphore:
-            async def invoke() -> list[Finding]:
-                return await plugin.run(filtered, self.context)
+        target_sem = await self._get_target_semaphore(filtered.target)
+        async with target_sem:
+            await self.rate.wait()
+            await self._wait_target_budget(filtered.target)
+            async with self.semaphore:
+                async def invoke() -> list[Finding]:
+                    return await plugin.run(filtered, self.context)
 
-            started_at = time.monotonic()
-            try:
-                findings = await asyncio.wait_for(
-                    retry_async(invoke, retries=self.max_retries, base_delay=self.backoff),
-                    timeout=self.task_timeout_seconds,
-                )
-                findings = plugin.normalize_findings(findings, filtered)
-            except asyncio.TimeoutError:
+                started_at = time.monotonic()
+                try:
+                    findings = await asyncio.wait_for(
+                        retry_async(invoke, retries=self.max_retries, base_delay=self.backoff),
+                        timeout=self.task_timeout_seconds,
+                    )
+                    findings = plugin.normalize_findings(findings, filtered)
+                except asyncio.TimeoutError:
+                    elapsed = round(time.monotonic() - started_at, 2)
+                    self._task_timeouts_total += 1
+                    self._task_timeouts_by_target[filtered.target] = int(self._task_timeouts_by_target.get(filtered.target, 0) or 0) + 1
+                    self.logger.error(
+                        f"pipeline_task_timeout plugin={filtered.plugin} target={filtered.target} "
+                        f"timeout={self.task_timeout_seconds}s elapsed={elapsed}s"
+                    )
+                    if self.metrics_enabled:
+                        stats = self._plugin_stats[filtered.plugin]
+                        stats["calls"] += 1.0
+                        stats["errors"] += 1.0
+                        stats["latency_sum"] += float(elapsed)
+                    return []
+                except Exception as err:
+                    self.logger.error(f"pipeline_task_failed plugin={filtered.plugin} target={filtered.target} err={err}")
+                    if self.metrics_enabled:
+                        elapsed = round(time.monotonic() - started_at, 2)
+                        stats = self._plugin_stats[filtered.plugin]
+                        stats["calls"] += 1.0
+                        stats["errors"] += 1.0
+                        stats["latency_sum"] += float(elapsed)
+                    return []
                 elapsed = round(time.monotonic() - started_at, 2)
-                self._task_timeouts_total += 1
-                self._task_timeouts_by_target[filtered.target] = int(self._task_timeouts_by_target.get(filtered.target, 0) or 0) + 1
-                self.logger.error(
-                    f"pipeline_task_timeout plugin={filtered.plugin} target={filtered.target} "
-                    f"timeout={self.task_timeout_seconds}s elapsed={elapsed}s"
-                )
-                return []
-            except Exception as err:
-                self.logger.error(f"pipeline_task_failed plugin={filtered.plugin} target={filtered.target} err={err}")
-                return []
-            elapsed = round(time.monotonic() - started_at, 2)
-            if elapsed >= self.batch_heartbeat_seconds:
-                self.logger.info(
-                    f"pipeline_task_slow_complete plugin={filtered.plugin} target={filtered.target} elapsed={elapsed}s findings={len(findings)}"
-                )
-            for ep in _task_endpoints(filtered):
-                self.state.mark_scanned(filtered.plugin, filtered.target, ep)
-            return findings
+                if elapsed >= self.batch_heartbeat_seconds:
+                    self.logger.info(
+                        f"pipeline_task_slow_complete plugin={filtered.plugin} target={filtered.target} elapsed={elapsed}s findings={len(findings)}"
+                    )
+                if self.metrics_enabled:
+                    stats = self._plugin_stats[filtered.plugin]
+                    stats["calls"] += 1.0
+                    stats["latency_sum"] += float(elapsed)
+                for ep in _task_endpoints(filtered):
+                    self.state.mark_scanned(filtered.plugin, filtered.target, ep)
+                return findings
 
     async def run_batch(self, tasks: list[Task]) -> list[Finding]:
         if not tasks:
@@ -1915,6 +2813,18 @@ class ResearchScheduler:
                     self.logger.error(
                         f"pipeline_batch_task_failed plugin={work_item.plugin} target={work_item.target} err={err}"
                     )
+        if self.metrics_enabled and self._plugin_stats:
+            for name, stats in sorted(self._plugin_stats.items()):
+                calls = int(stats.get("calls", 0) or 0)
+                errors = int(stats.get("errors", 0) or 0)
+                latency_sum = float(stats.get("latency_sum", 0.0) or 0.0)
+                if calls <= 0:
+                    continue
+                avg = latency_sum / max(1, calls)
+                self.logger.info(
+                    "plugin_metrics "
+                    f"plugin={name} calls={calls} errors={errors} avg_latency={avg:.2f}s"
+                )
         return out
 
 
@@ -1934,26 +2844,30 @@ def persist_triage_outputs(
     actionable_rows: list[dict[str, Any]],
     review_rows: list[dict[str, Any]],
 ) -> None:
-    triage_dir = ensure_directory(out_dir / "triage", mode=0o755)
-    export_json(triage_dir / "actionable_findings.json", actionable_rows)
-    export_json(triage_dir / "review_queue.json", review_rows)
-    (triage_dir / "actionable_findings.jsonl").write_text(to_jsonl(actionable_rows), encoding="utf-8")
-    (triage_dir / "review_queue.jsonl").write_text(to_jsonl(review_rows), encoding="utf-8")
-    export_markdown(triage_dir / "actionable_findings.md", actionable_rows, f"{run_id}-actionable")
-    export_markdown(triage_dir / "review_queue.md", review_rows, f"{run_id}-review-queue")
-    (triage_dir / "summary.json").write_text(
-        json.dumps(
-            {
-                "run_id": run_id,
-                "actionable_count": len(actionable_rows),
-                "review_count": len(review_rows),
-            },
-            ensure_ascii=True,
-            indent=2,
+    def _write_triage(dir_path: Path) -> None:
+        triage_dir = ensure_directory(dir_path, mode=0o755)
+        export_json(triage_dir / "actionable_findings.json", actionable_rows)
+        export_json(triage_dir / "review_queue.json", review_rows)
+        (triage_dir / "actionable_findings.jsonl").write_text(to_jsonl(actionable_rows), encoding="utf-8")
+        (triage_dir / "review_queue.jsonl").write_text(to_jsonl(review_rows), encoding="utf-8")
+        export_markdown(triage_dir / "actionable_findings.md", actionable_rows, f"{run_id}-actionable")
+        export_markdown(triage_dir / "review_queue.md", review_rows, f"{run_id}-review-queue")
+        (triage_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "actionable_count": len(actionable_rows),
+                    "review_count": len(review_rows),
+                },
+                ensure_ascii=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
         )
-        + "\n",
-        encoding="utf-8",
-    )
+
+    _write_triage(out_dir / "triage")
+    _write_triage(out_dir / "runs" / str(run_id) / "triage")
 
 
 def print_research_summary_table(rows: list[dict[str, Any]]) -> None:
@@ -2140,12 +3054,21 @@ async def run_async(args: argparse.Namespace) -> int:
         logger.info(f"configured_pipeline_log_attached path={configured_pipeline_log}")
 
     runtime = get_runtime(cfg)
+    metrics_cfg = cfg.get("metrics", {}) if isinstance(cfg.get("metrics", {}), dict) else {}
+    metrics_enabled = bool(metrics_cfg.get("enabled", False))
+    metrics_port = int(metrics_cfg.get("port", int(os.getenv("HUNTEROPS_METRICS_PORT", "9108") or 9108)) or 9108)
+    if metrics_enabled or os.getenv("HUNTEROPS_METRICS_PORT"):
+        enable_metrics(metrics_port)
+        logger.info(f"metrics_enabled port={metrics_port}")
     triage_cfg = cfg.get("triage", {}) if isinstance(cfg.get("triage"), dict) else {}
     logger.info(
         "triage_policy "
         f"actionable_min_severity={str(triage_cfg.get('actionable_min_severity', 'high')).strip().lower() or 'high'} "
         f"actionable_min_confidence={float(triage_cfg.get('actionable_min_confidence', 80.0) or 80.0)} "
         f"actionable_min_impact={float(triage_cfg.get('actionable_min_impact', 70.0) or 70.0)} "
+        f"alert_min_severity={str(triage_cfg.get('alert_min_severity', triage_cfg.get('actionable_min_severity', 'high'))).strip().lower() or 'high'} "
+        f"alert_min_confidence={float(triage_cfg.get('alert_min_confidence', triage_cfg.get('actionable_min_confidence', 80.0)) or 80.0)} "
+        f"alert_require_actionable={int(bool(triage_cfg.get('alert_require_actionable', False)))} "
         f"allow_correlation_alerts={int(bool(triage_cfg.get('allow_correlation_alerts', False)))}"
     )
     pool_cfg = cfg.get("http_pool", {}) if isinstance(cfg.get("http_pool"), dict) else {}
@@ -2158,10 +3081,19 @@ async def run_async(args: argparse.Namespace) -> int:
         retries=int(pool_cfg.get("retries", 0)),
         linux_socket_tuning=bool(pool_cfg.get("linux_socket_tuning", True)),
     )
+    configure_global_http_limits(
+        rate_per_sec=float(runtime.get("global_http_rate_limit_per_sec", 10.0)),
+        max_inflight=int(runtime.get("global_http_max_inflight", 10)),
+    )
     logger.info(
         "startup_http_pool_configured "
         f"max_connections={int(pool_cfg.get('max_connections', max(50, int(runtime.get('concurrency', 10)) * 12)))} "
         f"keepalive={int(pool_cfg.get('max_keepalive_connections', max(20, int(runtime.get('concurrency', 10)) * 4)))}"
+    )
+    logger.info(
+        "startup_http_global_limit_configured "
+        f"rps={float(runtime.get('global_http_rate_limit_per_sec', 10.0))} "
+        f"max_inflight={int(runtime.get('global_http_max_inflight', 10))}"
     )
     discord = DiscordDispatch(cfg=cfg.get("modules", {}).get("discord_notifier", {}), logger=logger)
     alert_router = AlertRouter(cfg=cfg.get("modules", {}).get("alert_router", {}), logger=logger)
@@ -2232,30 +3164,191 @@ async def run_async(args: argparse.Namespace) -> int:
                 await _shutdown_clients()
                 return 5
 
+    h1_manager = HackerOneManager(cfg=cfg.get("modules", {}).get("hackerone_manager", {}), logger=logger)
+    intigriti_manager = IntigritiManager(cfg=cfg.get("modules", {}).get("intigriti_manager", {}), logger=logger)
+    scope_manager: Any | None = None
+    scope_provider = "none"
+    if intigriti_manager.enabled and h1_manager.enabled:
+        logger.warning("scope_provider_conflict intigriti=enabled hackerone=enabled selected=intigriti")
+    if intigriti_manager.enabled:
+        scope_manager = intigriti_manager
+        scope_provider = "intigriti"
+    elif h1_manager.enabled:
+        scope_manager = h1_manager
+        scope_provider = "hackerone"
+
     targets = collect_targets(args)
-    if not targets:
+    if not targets and not (scope_manager and bool(getattr(scope_manager, "enabled", False))):
         logger.error("no_targets_provided")
         await _shutdown_clients()
         return 2
+    if not targets and scope_manager and bool(getattr(scope_manager, "enabled", False)):
+        logger.info(f"targets_seed_empty provider={scope_provider} mode=scope_sync_only")
 
-    h1_manager = HackerOneManager(cfg=cfg.get("modules", {}).get("hackerone_manager", {}), logger=logger)
-    h1_scope_added: set[str] = set()
-    if h1_manager.enabled:
+    scope_added: set[str] = set()
+    if scope_manager and bool(getattr(scope_manager, "enabled", False)):
         try:
-            scope_state = h1_manager.watch_scope_updates(timeout=int(runtime.get("timeout_seconds", 25)))
-            scope_hosts = sorted(list(h1_manager.current_scope_hosts()))
-            if scope_hosts:
-                targets = sorted(list(set(targets) | set(scope_hosts)))
-            targets = h1_manager.filter_targets(targets)
-            h1_scope_added = {str(x).strip().lower() for x in scope_state.get("added_hosts", []) if str(x).strip()}
-            logger.info(f"h1_scope_sync enabled={scope_state.get('enabled', False)} targets={len(targets)} added={len(h1_scope_added)}")
+            scope_state = scope_manager.watch_scope_updates(timeout=int(runtime.get("timeout_seconds", 25)))
+            if not bool(scope_state.get("enabled", False)):
+                logger.warning(
+                    "scope_sync_unavailable "
+                    f"provider={scope_provider} "
+                    f"reason={scope_state.get('reason', 'unknown')}"
+                )
+                if bool(getattr(scope_manager, "strict_scope", False)):
+                    await _shutdown_clients()
+                    return 5
+            else:
+                scope_hosts = sorted(list(scope_manager.current_scope_hosts()))
+                if scope_hosts:
+                    targets = sorted(list(set(targets) | set(scope_hosts)))
+                targets = scope_manager.filter_targets(targets)
+                scope_added = {str(x).strip().lower() for x in scope_state.get("added_hosts", []) if str(x).strip()}
+                logger.info(
+                    "scope_sync "
+                    f"provider={scope_provider} "
+                    f"enabled={scope_state.get('enabled', False)} "
+                    f"targets={len(targets)} "
+                    f"added={len(scope_added)}"
+                )
         except Exception as err:
-            logger.error(f"h1_scope_sync_failed err={err}")
-            if h1_manager.strict_scope:
+            logger.error(f"scope_sync_failed provider={scope_provider} err={err}")
+            if bool(getattr(scope_manager, "strict_scope", False)):
                 await _shutdown_clients()
                 return 5
     if not targets:
-        logger.error("no_in_scope_targets_after_hackerone_sync")
+        logger.error("no_in_scope_targets_after_scope_sync")
+        await _shutdown_clients()
+        return 2
+
+    targets = apply_target_governance(
+        targets,
+        allow_patterns=runtime.get("target_allowlist_patterns", []) if isinstance(runtime.get("target_allowlist_patterns", []), list) else [],
+        deny_patterns=runtime.get("target_denylist_patterns", []) if isinstance(runtime.get("target_denylist_patterns", []), list) else [],
+        priority_patterns=runtime.get("target_priority_patterns", []) if isinstance(runtime.get("target_priority_patterns", []), list) else [],
+        logger=logger,
+    )
+
+    program_target_rps: dict[str, float] = {}
+    program_limit_rps: float = 0.0
+    program_blocked_paths: dict[str, list[str]] = {}
+    program_by_target: dict[str, str] = {}
+    programs_by_target: dict[str, list[str]] = {}
+    target_policies: dict[str, list[ScopePolicy]] = {}
+    programs_doc = load_programs(resolve_path("config/programs.yaml"))
+    program_entries = programs_doc.get("programs", []) if isinstance(programs_doc, dict) else []
+    require_program_match = _env_truthy("HUNTEROPS_REQUIRE_PROGRAM_MATCH", default=True)
+    if require_program_match and (not isinstance(program_entries, list) or not program_entries):
+        logger.error("program_config_missing action=abort reason=empty_programs_yaml")
+        return
+    if isinstance(program_entries, list) and program_entries:
+        enforce_allowed_hours = _env_truthy("HUNTEROPS_ENFORCE_ALLOWED_HOURS", default=True)
+        require_program_headers = _env_truthy("HUNTEROPS_REQUIRE_PROGRAM_HEADERS", default=True)
+        program_names = sorted(
+            {
+                str(entry.get("name", "")).strip()
+                for entry in program_entries
+                if isinstance(entry, dict) and str(entry.get("name", "")).strip()
+            }
+        )
+        program_policies = {name: collect_scope(programs_doc, name) for name in program_names}
+        filtered_targets: list[str] = []
+        policy_rps_values: list[float] = []
+        for target in targets:
+            matched: list[tuple[str, ScopePolicy]] = []
+            for name, policy in program_policies.items():
+                if in_scope(target, policy):
+                    matched.append((name, policy))
+            if not matched:
+                if require_program_match:
+                    logger.error(f"program_scope_missing target={target} action=drop")
+                    continue
+                filtered_targets.append(target)
+                continue
+            blocked = False
+            matched_names: list[str] = []
+            for name, policy in matched:
+                matched_names.append(name)
+                decision = check_automation_allowed(policy.rules_of_engagement)
+                if decision.manual_only:
+                    logger.error(
+                        "automation_not_allowed "
+                        f"program={name} target={target} reason={decision.reason} action=drop"
+                    )
+                    blocked = True
+                    break
+                if enforce_allowed_hours and not _policy_allows_now(policy):
+                    logger.warning(
+                        "outside_allowed_hours "
+                        f"program={name} target={target} action=skip"
+                    )
+                    blocked = True
+                    break
+                if require_program_headers:
+                    missing = _missing_required_headers(policy)
+                    if missing:
+                        logger.error(
+                            "required_headers_missing "
+                            f"program={name} target={target} headers={','.join(missing)} action=drop"
+                        )
+                        blocked = True
+                        break
+            if blocked:
+                continue
+            filtered_targets.append(target)
+            if matched_names:
+                program_by_target[target] = matched_names[0]
+                programs_by_target[target] = matched_names
+            target_policies[target] = [policy for _, policy in matched]
+            blocked_paths: list[str] = []
+            for _, policy in matched:
+                blocked_paths.extend(policy.blocked_paths or [])
+            if blocked_paths:
+                program_blocked_paths[target] = sorted({str(x).strip() for x in blocked_paths if str(x).strip()})
+            per_target_rps: list[float] = []
+            for _, policy in matched:
+                rps = _policy_rps(policy)
+                if rps > 0:
+                    per_target_rps.append(rps)
+            if per_target_rps:
+                program_target_rps[target] = min(per_target_rps)
+                policy_rps_values.append(program_target_rps[target])
+
+        if len(filtered_targets) != len(targets):
+            logger.warning(
+                "program_scope_filter_applied "
+                f"input={len(targets)} output={len(filtered_targets)} "
+                f"require_match={int(require_program_match)} "
+                f"enforce_hours={int(enforce_allowed_hours)} "
+                f"require_headers={int(require_program_headers)}"
+            )
+        targets = filtered_targets
+        if policy_rps_values:
+            program_limit_rps = min(policy_rps_values)
+            current = float(runtime.get("rate_limit_per_sec", 10.0))
+            if program_limit_rps > 0 and current > program_limit_rps:
+                runtime["rate_limit_per_sec"] = program_limit_rps
+                global_rps = float(runtime.get("global_http_rate_limit_per_sec", program_limit_rps))
+                runtime["global_http_rate_limit_per_sec"] = min(global_rps, program_limit_rps)
+                configure_global_http_limits(
+                    rate_per_sec=float(runtime.get("global_http_rate_limit_per_sec", program_limit_rps)),
+                    max_inflight=int(runtime.get("global_http_max_inflight", 10)),
+                )
+                logger.warning(
+                    "rate_limit_clamped_by_program_policy "
+                    f"global_rps={float(runtime.get('global_http_rate_limit_per_sec', program_limit_rps))} "
+                    f"runtime_rps={float(runtime.get('rate_limit_per_sec', program_limit_rps))}"
+                )
+
+    scope_doc = load_authorized_scope()
+    if scope_doc:
+        _warn_scope_expiry(scope_doc, logger)
+    ok, unauthorized = authorize_targets(targets, scope_doc)
+    if not ok:
+        logger.error(f"scope_authorization_failed unauthorized={unauthorized}")
+        return
+    if not targets:
+        logger.error("no_targets_after_governance_filter")
         await _shutdown_clients()
         return 2
 
@@ -2265,18 +3358,79 @@ async def run_async(args: argparse.Namespace) -> int:
         plugin_profile = str(runtime.get("plugin_profile", "safe")).strip().lower() or "safe"
         if plugin_profile == "full":
             plugin_names = [
+                "asset_discovery_engine",
+                "recon_engine",
+                "surface_massive",
+                "crawler_intelligent",
+                "intelligent_crawler",
+                "deep_js_intelligence",
+                "deep_js_analyzer",
+                "javascript_deep_analysis",
+                "hidden_route_discovery",
+                "hidden_route_detector",
+                "surface_expansion",
+                "parameter_enum",
+                "js_route_mapper",
+                "surface_mapper",
+                "undocumented_api",
+                "graphql_scan",
+                "cors",
+                "takeover",
+                "parameter_intelligence",
+                "differential_auth_prover",
+                "business_logic_sniper",
+                "vulnerability_correlation_engine",
+                "report_synthesis",
+                "security_report_builder",
+                "evidence_packager",
+            ]
+            for extra in ("logic_prover", "auth_matrix_engine", "entity_cross_pollinator", "race_condition_turbo"):
+                if extra not in plugin_names:
+                    plugin_names.append(extra)
+        elif plugin_profile in {"capital_idor_focus", "capital_closed_loop"}:
+            plugin_names = [
                 "deep_js_intelligence",
                 "parameter_intelligence",
                 "business_logic_sniper",
-                "race_condition_turbo",
                 "differential_auth_prover",
-                "vulnerability_correlation_engine",
-                "logic_prover",
                 "auth_matrix_engine",
+                "logic_prover",
                 "entity_cross_pollinator",
+                "vulnerability_correlation_engine",
                 "report_synthesis",
                 "evidence_packager",
+                "security_report_builder",
             ]
+            logger.info(f"plugin_profile_selected profile={plugin_profile} mode=capital_closed_loop")
+        elif plugin_profile in {"low_medium", "low_medium_hunt", "profit_low_medium"}:
+            plugin_names = [
+                "asset_discovery_engine",
+                "recon_engine",
+                "surface_massive",
+                "crawler_intelligent",
+                "intelligent_crawler",
+                "deep_js_intelligence",
+                "deep_js_analyzer",
+                "javascript_deep_analysis",
+                "hidden_route_discovery",
+                "hidden_route_detector",
+                "surface_expansion",
+                "parameter_enum",
+                "js_route_mapper",
+                "surface_mapper",
+                "undocumented_api",
+                "graphql_scan",
+                "cors",
+                "takeover",
+                "parameter_intelligence",
+                "differential_auth_prover",
+                "business_logic_sniper",
+                "vulnerability_correlation_engine",
+                "report_synthesis",
+                "security_report_builder",
+                "evidence_packager",
+            ]
+            logger.info(f"plugin_profile_selected profile={plugin_profile} mode=low_medium_hunt")
         else:
             plugin_names = [
                 "deep_js_intelligence",
@@ -2288,6 +3442,16 @@ async def run_async(args: argparse.Namespace) -> int:
                 "evidence_packager",
             ]
             logger.info(f"plugin_profile_selected profile={plugin_profile} mode=safe")
+    if bool(runtime.get("attack_chain_seed_enabled", True)) and "attack_chain_seed" not in plugin_names:
+        plugin_names.append("attack_chain_seed")
+    allowed_plugins = runtime.get("allowed_plugins", []) if isinstance(runtime.get("allowed_plugins", []), list) else []
+    blocked_plugins = runtime.get("blocked_plugins", []) if isinstance(runtime.get("blocked_plugins", []), list) else []
+    if allowed_plugins:
+        allowed_set = {str(x).strip().lower() for x in allowed_plugins if str(x).strip()}
+        plugin_names = [p for p in plugin_names if p in allowed_set]
+    if blocked_plugins:
+        blocked_set = {str(x).strip().lower() for x in blocked_plugins if str(x).strip()}
+        plugin_names = [p for p in plugin_names if p not in blocked_set]
     dep_report = evaluate_runtime_dependencies(cfg, plugin_names)
     for msg in dep_report["critical_warnings"]:
         logger.critical(msg)
@@ -2296,6 +3460,102 @@ async def run_async(args: argparse.Namespace) -> int:
         logger.error("no_runnable_plugins_after_dependency_checks")
         await _shutdown_clients()
         return 6
+    program_allowed_plugins: dict[str, list[str]] = {}
+    program_blocked_plugins: dict[str, list[str]] = {}
+    if target_policies:
+        plugin_set = {str(p).strip().lower() for p in plugin_names if str(p).strip()}
+        for target, policies in target_policies.items():
+            allowed_explicit: set[str] = set()
+            blocked_explicit: set[str] = set()
+            allowed_tokens: set[str] = set()
+            blocked_tokens: set[str] = set()
+            for policy in policies:
+                allowed_explicit |= {
+                    str(x).strip().lower()
+                    for x in (getattr(policy, "allowed_plugins", []) or [])
+                    if str(x).strip()
+                }
+                blocked_explicit |= {
+                    str(x).strip().lower()
+                    for x in (getattr(policy, "blocked_plugins", []) or [])
+                    if str(x).strip()
+                }
+                allowed_tokens |= {
+                    str(x).strip().lower()
+                    for x in (policy.allowed_modules or [])
+                    if str(x).strip() and len(str(x).strip()) >= 2
+                }
+                blocked_tokens |= {
+                    str(x).strip().lower()
+                    for x in (policy.blocked_modules or [])
+                    if str(x).strip() and len(str(x).strip()) >= 2
+                }
+            allowed_effective: set[str] = set()
+            if allowed_explicit:
+                allowed_effective |= {p for p in plugin_set if p in allowed_explicit}
+            if allowed_tokens:
+                allowed_effective |= {p for p in plugin_set if any(tok in p for tok in allowed_tokens)}
+            if allowed_explicit or allowed_tokens:
+                if allowed_effective:
+                    program_allowed_plugins[target] = sorted(allowed_effective)
+                else:
+                    logger.warning(
+                        "program_allowed_plugins_unmatched "
+                        f"target={target} allowed_plugins={','.join(sorted(allowed_explicit)) or 'none'} "
+                        f"allowed_modules={','.join(sorted(allowed_tokens)) or 'none'}"
+                    )
+            blocked_effective: set[str] = set()
+            if blocked_explicit:
+                blocked_effective |= {p for p in plugin_set if p in blocked_explicit}
+            if blocked_tokens:
+                blocked_effective |= {p for p in plugin_set if any(tok in p for tok in blocked_tokens)}
+            if blocked_effective:
+                program_blocked_plugins[target] = sorted(blocked_effective)
+    sessions_path = resolve_path(
+        str(
+            (
+                cfg.get("modules", {}).get("auth_matrix_engine", {}) if isinstance(cfg.get("modules"), dict) else {}
+            ).get("sessions_file", "data/sessions.yaml")
+        )
+    )
+    configured_sessions = load_sessions(sessions_path)
+    populated_sessions = sorted(
+        [name for name, session in configured_sessions.items() if auth_header(session)],
+    )
+    if not populated_sessions:
+        logger.warning(
+            "auth_sessions_not_configured "
+            f"path={sessions_path} "
+            "impact=restricted_authenticated_coverage"
+        )
+    else:
+        logger.info(
+            "auth_sessions_loaded "
+            f"path={sessions_path} "
+            f"profiles={','.join(populated_sessions)}"
+        )
+        if "user" not in populated_sessions or "user_b" not in populated_sessions:
+            logger.warning("auth_sessions_partial profiles_expected=user,user_b impact=idor_and_auth_diff_reduced")
+
+    session_guardian = SessionGuardian(
+        cfg=cfg.get("modules", {}).get("session_guardian", {}),
+        runtime=runtime,
+        logger=logger,
+        storage=storage,
+        sessions_file=sessions_path,
+    )
+    await session_guardian.warmup()
+    impact_validator = ImpactValidator(
+        cfg=cfg.get("modules", {}).get("impact_validator", {}),
+        runtime=runtime,
+        logger=logger,
+    )
+    logger.info(
+        "validation_modules "
+        f"session_guardian_enabled={int(session_guardian.enabled)} "
+        f"impact_validator_enabled={int(impact_validator.enabled)}"
+    )
+
     logger.info(
         "startup_phase_notifier_check begin=true "
         f"discord_available={int(discord.available)} "
@@ -2306,10 +3566,26 @@ async def run_async(args: argparse.Namespace) -> int:
     logger.info("startup_phase_notifier_check completed=true")
     plugins = load_plugins(plugin_names)
     target_rps_map: dict[str, float] = {}
-    if h1_manager.enabled:
+    if program_target_rps:
+        target_rps_map.update(program_target_rps)
+    if scope_manager and bool(getattr(scope_manager, "enabled", False)):
         for target in targets:
-            target_rps_map[target] = h1_manager.target_rps(target)
-    context = {"config": cfg, "runtime": runtime, "logger": logger, "target_rps": target_rps_map}
+            scope_rps = float(scope_manager.target_rps(target))
+            policy_rps = float(program_target_rps.get(target, 0.0) or 0.0)
+            if scope_rps > 0 and policy_rps > 0:
+                target_rps_map[target] = min(scope_rps, policy_rps)
+            elif scope_rps > 0:
+                target_rps_map[target] = scope_rps
+            elif policy_rps > 0:
+                target_rps_map[target] = policy_rps
+    context = {
+        "config": cfg,
+        "runtime": runtime,
+        "logger": logger,
+        "target_rps": target_rps_map,
+        "session_guardian": session_guardian,
+        "storage": storage,
+    }
     ade_brain = ADEBrainPlugin()
     report_engine = ReportEngine(
         cfg=cfg.get("modules", {}).get("report_engine", {}),
@@ -2317,7 +3593,28 @@ async def run_async(args: argparse.Namespace) -> int:
         storage=storage,
     )
 
-    state = ResearchState(run_id=ts, storage=storage)
+    endpoint_cache_enabled = bool(runtime.get("endpoint_cache_enabled", True)) and not _env_truthy("HUNTEROPS_DISABLE_ENDPOINT_CACHE", False)
+    try:
+        endpoint_cache_ttl_hours = float(runtime.get("endpoint_cache_ttl_hours", 24.0) or 0)
+    except Exception:
+        endpoint_cache_ttl_hours = 24.0
+    endpoint_cache_ttl_seconds = max(0, int(endpoint_cache_ttl_hours * 3600))
+    endpoint_cache_max_entries = int(runtime.get("endpoint_cache_max_entries", 50000) or 50000)
+    noise_patterns = runtime.get("endpoint_noise_patterns", [])
+    if not isinstance(noise_patterns, list):
+        noise_patterns = []
+    state = ResearchState(
+        run_id=ts,
+        storage=storage,
+        endpoint_cache_enabled=endpoint_cache_enabled,
+        endpoint_cache_ttl_seconds=endpoint_cache_ttl_seconds,
+        endpoint_cache_max_entries=endpoint_cache_max_entries,
+        endpoint_cache_local={},
+        endpoint_noise_patterns=[str(x) for x in noise_patterns if str(x).strip()],
+        blocked_paths_by_target=program_blocked_paths,
+        allowed_plugins_by_target=program_allowed_plugins,
+        blocked_plugins_by_target=program_blocked_plugins,
+    )
     scheduler = ResearchScheduler(plugins=plugins, context=context, state=state)
     packs = load_program_packs(resolve_path(cfg.get("program_packs", {}).get("file", "config/program_packs.yaml")))
     reactions = ReactionLogic()
@@ -2327,7 +3624,36 @@ async def run_async(args: argparse.Namespace) -> int:
     available_plugins = set(plugins.keys())
     recursion_max_depth = int(runtime.get("recursion_max_depth", 2))
     max_tasks_per_target = max(20, int(runtime.get("max_tasks_per_target", 1200)))
-    queue_engine = HighValuePriorityQueue(max_size=int(runtime.get("task_queue_size", 4000)))
+    priority_patterns = runtime.get("priority_endpoint_patterns", [])
+    if not isinstance(priority_patterns, list) or not priority_patterns:
+        priority_patterns = list(SENSITIVE_PRIORITY_KEYWORDS)
+    try:
+        priority_boost = float(runtime.get("priority_endpoint_boost", 12.0) or 12.0)
+    except Exception:
+        priority_boost = 12.0
+    roi_patterns = runtime.get("roi_endpoint_patterns", [])
+    if not isinstance(roi_patterns, list):
+        roi_patterns = []
+    try:
+        roi_boost = float(runtime.get("roi_endpoint_boost", 18.0) or 18.0)
+    except Exception:
+        roi_boost = 18.0
+    roi_plugin_boosts = runtime.get("roi_plugin_boosts", {})
+    if not isinstance(roi_plugin_boosts, dict):
+        roi_plugin_boosts = {}
+    try:
+        roi_boost_cap = float(runtime.get("roi_boost_cap", 30.0) or 30.0)
+    except Exception:
+        roi_boost_cap = 30.0
+    queue_engine = HighValuePriorityQueue(
+        max_size=int(runtime.get("task_queue_size", 4000)),
+        priority_patterns=priority_patterns,
+        priority_boost=priority_boost,
+        roi_patterns=roi_patterns,
+        roi_boost=roi_boost,
+        roi_plugin_boosts=roi_plugin_boosts,
+        roi_boost_cap=roi_boost_cap,
+    )
     wave_size = max(1, int(runtime.get("concurrency", 10)) * 2)
     adaptive_levels_cfg = runtime.get("adaptive_levels", {}) if isinstance(runtime.get("adaptive_levels"), dict) else {}
     adaptive_levels_enabled = bool(adaptive_levels_cfg.get("enabled", True))
@@ -2351,6 +3677,16 @@ async def run_async(args: argparse.Namespace) -> int:
     except Exception:
         adaptive_escalate_after_clean_rounds = 1
     adaptive_demote_on_feedback = bool(adaptive_levels_cfg.get("demote_on_feedback", True))
+
+    delta_priority_min_score = float(runtime.get("delta_priority_min_score", 35.0) or 35.0)
+    delta_priority_window_seconds = int(runtime.get("delta_priority_window_seconds", 900) or 900)
+    roi_patterns_for_delta = runtime.get("roi_endpoint_patterns", [])
+    if not isinstance(roi_patterns_for_delta, list):
+        roi_patterns_for_delta = []
+    try:
+        findings_flush_every = int(runtime.get("findings_flush_every", 200) or 200)
+    except Exception:
+        findings_flush_every = 200
     adaptive_demote_on_timeout = bool(adaptive_levels_cfg.get("demote_on_timeout", True))
     logger.info(
         "adaptive_levels "
@@ -2362,29 +3698,57 @@ async def run_async(args: argparse.Namespace) -> int:
     )
 
     all_findings: list[Finding] = []
+    flushed_findings = False
+    findings_storage_failed = False
     notified_logic_signals: set[str] = set()
     notified_report_paths: set[str] = set()
+    processed_tasks_total = 0
     for target in targets:
         logger.info(f"target_scan_start target={target}")
-        if h1_manager.enabled and not h1_manager.in_scope(target):
+        if scope_manager and bool(getattr(scope_manager, "enabled", False)) and not scope_manager.in_scope(target):
             logger.warning(f"skip_out_of_scope_target target={target}")
             continue
-        pack = resolve_pack(target, packs)
-        initial_priority = 100 if str(target).strip().lower() in h1_scope_added else 70
-        pending: list[Task] = [
-            Task(
-                plugin="deep_js_intelligence",
-                target=target,
-                payload={
-                    "run_id": ts,
-                    "program_pack": pack or {},
-                    "_depth": 0,
-                    "priority": initial_priority,
-                    "priority_score": initial_priority,
-                    "trigger": "h1_scope_update" if initial_priority == 100 else "initial_seed",
-                },
+        try:
+            guardian_events = await session_guardian.ensure_target_health(target=target, run_id=ts)
+        except Exception as err:
+            logger.error(f"session_guardian_target_health_failed target={target} err={type(err).__name__}")
+            guardian_events = []
+        for event in guardian_events:
+            logger.warning(
+                "session_guardian_event "
+                f"target={event.get('target', target)} "
+                f"session={event.get('session_name', '')} "
+                f"status={event.get('status', '')} "
+                f"reason={event.get('reason', '')} "
+                f"refresh_ok={int(bool(event.get('refresh_ok', False)))}"
             )
-        ]
+        pack = resolve_pack(target, packs)
+        initial_priority = 100 if str(target).strip().lower() in scope_added else 70
+        seed_plugins_cfg = runtime.get("seed_plugins", [])
+        if not isinstance(seed_plugins_cfg, list):
+            seed_plugins_cfg = []
+        seed_plugins = [str(p).strip().lower() for p in seed_plugins_cfg if str(p).strip()]
+        if not seed_plugins:
+            seed_plugins = ["deep_js_intelligence"]
+        seed_plugins = [p for p in seed_plugins if p in available_plugins]
+        if not seed_plugins:
+            seed_plugins = ["deep_js_intelligence"] if "deep_js_intelligence" in available_plugins else sorted(list(available_plugins))[:1]
+        pending: list[Task] = []
+        for plugin_name in seed_plugins:
+            pending.append(
+                Task(
+                    plugin=plugin_name,
+                    target=target,
+                    payload={
+                        "run_id": ts,
+                        "program_pack": pack or {},
+                        "_depth": 0,
+                        "priority": initial_priority,
+                        "priority_score": initial_priority,
+                        "trigger": f"{scope_provider}_scope_update" if initial_priority == 100 else f"initial_seed:{plugin_name}",
+                    },
+                )
+            )
         pending = queue_engine.rank(pending, findings=[])
         target_history: list[Finding] = []
         rounds = 0
@@ -2394,6 +3758,20 @@ async def run_async(args: argparse.Namespace) -> int:
         max_rounds = max(4, int(runtime.get("max_rounds_per_target", 6)))
         while pending and rounds < max_rounds and processed_tasks < max_tasks_per_target:
             rounds += 1
+            try:
+                round_guardian_events = await session_guardian.ensure_target_health(target=target, run_id=ts)
+            except Exception as err:
+                logger.error(f"session_guardian_round_health_failed target={target} round={rounds} err={type(err).__name__}")
+                round_guardian_events = []
+            for event in round_guardian_events:
+                logger.warning(
+                    "session_guardian_round_event "
+                    f"target={event.get('target', target)} "
+                    f"session={event.get('session_name', '')} "
+                    f"status={event.get('status', '')} "
+                    f"reason={event.get('reason', '')} "
+                    f"refresh_ok={int(bool(event.get('refresh_ok', False)))}"
+                )
             budget_left = max_tasks_per_target - processed_tasks
             if budget_left <= 0:
                 break
@@ -2463,6 +3841,16 @@ async def run_async(args: argparse.Namespace) -> int:
                         batch = dedupe_findings(batch)
                 except Exception as err:
                     logger.error(f"vulnerability_correlation_round_failed target={target} round={rounds} err={err}")
+            if impact_validator.enabled and batch:
+                try:
+                    batch = await impact_validator.validate_batch(
+                        target=target,
+                        run_id=ts,
+                        findings=batch,
+                    )
+                    batch = dedupe_findings(batch)
+                except Exception as err:
+                    logger.error(f"impact_validator_round_failed target={target} round={rounds} err={err}")
             report_findings = await _run_report_engine_if_high_critical(
                 report_engine=report_engine,
                 target=target,
@@ -2473,7 +3861,15 @@ async def run_async(args: argparse.Namespace) -> int:
             if report_findings:
                 batch.extend(report_findings)
                 batch = dedupe_findings(batch)
+            _annotate_program_metadata(batch, program_by_target, programs_by_target)
             all_findings.extend(batch)
+            if findings_flush_every > 0 and len(all_findings) >= findings_flush_every:
+                if storage and not findings_storage_failed:
+                    flushed_findings = True
+                    logger.info(
+                        f"research_findings_flush target={target} round={rounds} in_memory={len(all_findings)}"
+                    )
+                    all_findings = []
             await _route_alerts_from_batch(
                 alert_router=alert_router,
                 batch=batch,
@@ -2485,7 +3881,10 @@ async def run_async(args: argparse.Namespace) -> int:
             target_history.extend(batch)
             if len(target_history) > 1200:
                 target_history = target_history[-1200:]
-            feedback = _feedback_status_by_target(batch)
+            feedback = _feedback_status_by_target_window(
+                batch,
+                window_seconds=int(runtime.get("auto_mute_window_seconds", 120) or 120),
+            )
             if feedback:
                 for fb_target, statuses in feedback.items():
                     for status_code in statuses:
@@ -2494,12 +3893,17 @@ async def run_async(args: argparse.Namespace) -> int:
             for wave_target in wave_targets:
                 if wave_target not in feedback:
                     scheduler.clear_feedback(wave_target)
+            round_recursion_depth = _dynamic_recursion_depth_for_round(
+                base_depth=recursion_max_depth,
+                target=target,
+                findings=batch,
+            )
             feedback_retry_tasks = _build_feedback_retry_tasks(
                 current_wave=current_wave,
                 feedback=feedback,
                 scheduler=scheduler,
                 run_id=ts,
-                max_depth=recursion_max_depth,
+                max_depth=round_recursion_depth,
             )
             feedback_events_this_round = sum(len(statuses) for statuses in feedback.values())
             timeouts_this_round = max(0, scheduler.timeout_count(target) - round_timeout_before)
@@ -2512,6 +3916,9 @@ async def run_async(args: argparse.Namespace) -> int:
                     if sig in notified_logic_signals:
                         continue
                     notified_logic_signals.add(sig)
+                    dedupe_key = str(meta.get("structural_hash", "")).strip()
+                    if not dedupe_key:
+                        dedupe_key = f"{finding.target}|{_finding_source_endpoint(finding)}|{finding.category}|{finding.title}|{finding.severity}"
                     discord.route_finding_confirmed(
                         target=finding.target,
                         title=finding.title,
@@ -2522,6 +3929,7 @@ async def run_async(args: argparse.Namespace) -> int:
                         report_path=str(meta.get("report_path", "pending_generation")),
                         severity_level=str(finding.severity),
                         estimated_payout=_estimated_payout_for_severity(str(finding.severity)),
+                        dedupe_key=dedupe_key,
                     )
             entity_rows: list[dict[str, Any]] = []
             if storage and batch:
@@ -2535,6 +3943,7 @@ async def run_async(args: argparse.Namespace) -> int:
                 try:
                     storage.write_findings(run_id=ts, rows=serialize_findings(batch))
                 except Exception as err:
+                    findings_storage_failed = True
                     logger.error(f"research_write_batch_failed target={target} round={rounds} err={err}")
 
             delta = delta_monitor.compare(target=target, run_id=ts, current_findings=batch)
@@ -2551,7 +3960,21 @@ async def run_async(args: argparse.Namespace) -> int:
                     new_parameters=[str(x) for x in delta.get("new_parameters", []) if isinstance(x, str)],
                 )
 
+            delta_score = _delta_score(delta)
+            delta_has_roi = _delta_has_high_value(delta, roi_patterns_for_delta)
             next_tasks: list[Task] = []
+            # Delta-first: prioritize recon deltas before any other follow-ups.
+            if (delta_score >= delta_priority_min_score) or delta_has_roi:
+                next_tasks.extend(
+                    delta_monitor.build_priority_tasks(
+                        target=target,
+                        run_id=ts,
+                        pack=pack,
+                        current_findings=batch,
+                        available_plugins=available_plugins,
+                        precomputed_delta=delta,
+                    )
+                )
             next_tasks.extend(
                 reactions.tasks_from_saved_findings(
                     batch,
@@ -2560,19 +3983,17 @@ async def run_async(args: argparse.Namespace) -> int:
                     available_plugins=available_plugins,
                 )
             )
-            next_tasks.extend(
-                delta_monitor.build_priority_tasks(
-                    target=target,
-                    run_id=ts,
-                    pack=pack,
-                    current_findings=batch,
-                    available_plugins=available_plugins,
-                    precomputed_delta=delta,
-                )
-            )
             next_tasks.extend(logic_chaining.build_tasks(batch, run_id=ts, pack=pack, available_plugins=available_plugins))
             next_tasks.extend(feedback_retry_tasks)
-            next_tasks.extend(_spawn_tasks_from_findings(batch, max_depth=recursion_max_depth))
+            next_tasks.extend(
+                _spawn_tasks_from_findings(
+                    batch,
+                    max_depth=round_recursion_depth,
+                    attack_chain_seed_enabled=bool(runtime.get("attack_chain_seed_enabled", True)),
+                    attack_chain_seed_available=("attack_chain_seed" in available_plugins),
+                    attack_chain_seed_max_endpoints=int(runtime.get("attack_chain_seed_max_endpoints", 80) or 80),
+                )
+            )
             if "logic_prover" in available_plugins:
                 logic_paths: set[str] = set()
                 for finding in batch:
@@ -2680,6 +4101,7 @@ async def run_async(args: argparse.Namespace) -> int:
                 f"target_round_end target={target} "
                 f"round={rounds} "
                 f"level={target_adaptive_level} "
+                f"recursion_depth={round_recursion_depth} "
                 f"round_findings={len(batch)} "
                 f"round_feedback_events={feedback_events_this_round} "
                 f"round_timeouts={timeouts_this_round} "
@@ -2696,6 +4118,17 @@ async def run_async(args: argparse.Namespace) -> int:
             f"processed_tasks={processed_tasks} "
             f"target_findings={len(target_history)}"
         )
+        processed_tasks_total += processed_tasks
+
+    if flushed_findings and storage:
+        all_findings, reloaded_ok = _reload_findings_from_storage(
+            storage,
+            run_id=ts,
+            current=all_findings,
+            logger=logger,
+        )
+        if reloaded_ok:
+            flushed_findings = False
 
     all_findings = dedupe_findings(all_findings)
 
@@ -2703,12 +4136,12 @@ async def run_async(args: argparse.Namespace) -> int:
     if "report_synthesis" in plugins:
         synth_plugin = plugins["report_synthesis"]
         serialized = serialize_findings(all_findings)
-        if h1_manager.enabled:
+        if scope_manager and bool(getattr(scope_manager, "enabled", False)):
             try:
-                known_endpoints = h1_manager.fetch_known_report_endpoints(timeout=int(runtime.get("timeout_seconds", 25)))
-                serialized = h1_manager.suppress_probable_duplicates(serialized, known_endpoints)
+                known_endpoints = scope_manager.fetch_known_report_endpoints(timeout=int(runtime.get("timeout_seconds", 25)))
+                serialized = scope_manager.suppress_probable_duplicates(serialized, known_endpoints)
             except Exception as err:
-                logger.error(f"h1_duplicate_prevention_failed err={err}")
+                logger.error(f"scope_duplicate_prevention_failed provider={scope_provider} err={err}")
         synth_jobs = []
         for target in targets:
             target_rows = [row for row in serialized if str(row.get("target", "")) == target]
@@ -2743,6 +4176,7 @@ async def run_async(args: argparse.Namespace) -> int:
                 try:
                     storage.write_findings(run_id=ts, rows=serialize_findings(synthesized_findings))
                 except Exception as err:
+                    findings_storage_failed = True
                     logger.error(f"research_write_synthesized_findings_failed err={err}")
 
     packaged_findings: list[Finding] = []
@@ -2770,7 +4204,15 @@ async def run_async(args: argparse.Namespace) -> int:
             packaged_findings.extend(group)
         packaged_findings = dedupe_findings(packaged_findings)
         if packaged_findings:
+            _annotate_program_metadata(packaged_findings, program_by_target, programs_by_target)
             all_findings.extend(packaged_findings)
+            if findings_flush_every > 0 and len(all_findings) >= findings_flush_every:
+                if storage and not findings_storage_failed:
+                    flushed_findings = True
+                    logger.info(
+                        f"research_findings_flush phase=packaged in_memory={len(all_findings)}"
+                    )
+                    all_findings = []
             await _route_alerts_from_batch(
                 alert_router=alert_router,
                 batch=packaged_findings,
@@ -2783,6 +4225,7 @@ async def run_async(args: argparse.Namespace) -> int:
                 try:
                     storage.write_findings(run_id=ts, rows=serialize_findings(packaged_findings))
                 except Exception as err:
+                    findings_storage_failed = True
                     logger.error(f"research_write_packaged_findings_failed err={err}")
             if discord.available:
                 for finding in packaged_findings:
@@ -2798,6 +4241,7 @@ async def run_async(args: argparse.Namespace) -> int:
                         continue
                     if report_path:
                         notified_report_paths.add(report_path)
+                    dedupe_key = report_path or f"{finding.target}|{source_category}|{finding.title}|{finding.severity}"
                     discord.route_finding_confirmed(
                         target=finding.target,
                         title=str(finding.title),
@@ -2808,13 +4252,74 @@ async def run_async(args: argparse.Namespace) -> int:
                         report_path=report_path or "pending_generation",
                         severity_level=str(finding.severity),
                         estimated_payout=_estimated_payout_for_severity(str(finding.severity)),
+                        dedupe_key=dedupe_key,
                     )
+
+    security_report_findings: list[Finding] = []
+    if "security_report_builder" in plugins:
+        report_plugin = plugins["security_report_builder"]
+        report_jobs = []
+        serialized_all = serialize_findings(all_findings)
+        for target in targets:
+            target_rows = [row for row in serialized_all if str(row.get("target", "")).strip() == str(target).strip()]
+            report_jobs.append(
+                report_plugin.run(
+                    Task(
+                        plugin="security_report_builder",
+                        target=target,
+                        payload={
+                            "run_id": ts,
+                            "findings": target_rows,
+                        },
+                    ),
+                    context,
+                )
+            )
+        report_groups = await asyncio.gather(*report_jobs, return_exceptions=False)
+        for group in report_groups:
+            security_report_findings.extend(group)
+        security_report_findings = dedupe_findings(security_report_findings)
+        if security_report_findings:
+            all_findings.extend(security_report_findings)
+            await _route_alerts_from_batch(
+                alert_router=alert_router,
+                batch=security_report_findings,
+                run_id=ts,
+                logger=logger,
+                source="security_report_builder",
+                triage_cfg=triage_cfg,
+            )
+            if storage:
+                try:
+                    storage.write_findings(run_id=ts, rows=serialize_findings(security_report_findings))
+                except Exception as err:
+                    findings_storage_failed = True
+                    logger.error(f"research_write_security_report_findings_failed err={err}")
+
+    if flushed_findings and storage:
+        all_findings, reloaded_ok = _reload_findings_from_storage(
+            storage,
+            run_id=ts,
+            current=all_findings,
+            logger=logger,
+        )
+        if reloaded_ok:
+            flushed_findings = False
 
     all_findings = dedupe_findings(all_findings)
     actionable_findings, review_findings = split_findings_for_triage(all_findings, triage_cfg=triage_cfg)
     rows = serialize_findings(all_findings)
     actionable_rows = serialize_findings(actionable_findings)
     review_rows = serialize_findings(review_findings)
+    actionable_rows, review_rows, _validated_rows = await _run_shannon_validation_stage(
+        run_id=ts,
+        cfg=cfg,
+        storage=storage,
+        logger=logger,
+        out_dir=out_dir,
+        actionable_rows=actionable_rows,
+        review_rows=review_rows,
+    )
     persist_outputs(out_dir, f"{len(targets)}-targets", rows)
     persist_triage_outputs(
         out_dir,
@@ -2822,6 +4327,27 @@ async def run_async(args: argparse.Namespace) -> int:
         actionable_rows=actionable_rows,
         review_rows=review_rows,
     )
+    run_stats_dir = ensure_directory(out_dir / "runs" / ts, mode=0o755)
+    (run_stats_dir / "run_stats.json").write_text(
+        json.dumps(
+            {
+                "run_id": ts,
+                "targets": targets,
+                "processed_tasks": processed_tasks_total,
+                "findings_total": len(rows),
+                "actionable": len(actionable_rows),
+                "review": len(review_rows),
+                "validated": len(_validated_rows),
+            },
+            ensure_ascii=True,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    metrics_snapshot_path = run_stats_dir / "metrics" / f"metrics_{ts}.txt"
+    if write_metrics_snapshot(metrics_snapshot_path):
+        logger.info(f"metrics_snapshot_written path={metrics_snapshot_path}")
     generate_auto_poc(out_dir=out_dir, findings=all_findings, min_confidence=80.0)
     generate_research_artifacts(
         findings=all_findings,
@@ -2853,7 +4379,8 @@ async def run_async(args: argparse.Namespace) -> int:
         f"research_pipeline_completed run_id={ts} "
         f"findings={len(rows)} "
         f"actionable={len(actionable_rows)} "
-        f"review_queue={len(review_rows)}"
+        f"review_queue={len(review_rows)} "
+        f"validated={len(_validated_rows)}"
     )
     await _shutdown_clients()
     return 0

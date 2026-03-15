@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from hunterops.evidence import save_http_evidence
 from hunterops.http_client import request_http_async
+from hunterops.endpoint_cache import EndpointCache
 from hunterops.intelligence import http_diff_score
 from hunterops.plugin_base import Plugin
 from hunterops.storage import PostgresStorage
@@ -123,6 +124,16 @@ class PluginImpl(Plugin):
                 break
         if not seeds:
             seeds = ["/"]
+        cache = context.get("endpoint_cache")
+        if isinstance(cache, EndpointCache):
+            filtered_seeds: list[str] = []
+            for seed in seeds:
+                if cache.was_seen(plugin=self.name, target=task.target, endpoint=seed):
+                    continue
+                filtered_seeds.append(seed)
+            if not filtered_seeds:
+                return []
+            seeds = filtered_seeds
         run_id = str(payload.get("run_id", ""))
         evidence_root = Path(str(cfg.get("evidence_dir", "data/evidence/engine")))
         max_safe_probes = int(cfg.get("max_safe_probes", 25))
@@ -145,6 +156,8 @@ class PluginImpl(Plugin):
             r = await _fetch(url)
             text = str(r.get("text", ""))
             ep = urlparse(url).path or "/"
+            if isinstance(cache, EndpointCache):
+                cache.mark_seen(plugin=self.name, target=task.target, endpoint=ep)
             req_resp.append(
                 {
                     "request": {"method": "GET", "url": url, "headers": request_headers},

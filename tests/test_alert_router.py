@@ -79,7 +79,45 @@ class AlertRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("discord_research", captured)
         self.assertIn("slack_research", captured)
 
+    async def test_critical_public_data_exposure_dedupes_by_path(self) -> None:
+        router = AlertRouter(
+            {
+                "enabled": True,
+                "discord_critical_webhook": "https://discord.example/critical",
+                "dedupe_ttl_seconds": 600,
+            },
+            logger=None,
+        )
+        captured: list[str] = []
+
+        async def fake_post_json(webhook: str, payload: dict, *, route: str) -> None:  # noqa: ANN401
+            captured.append(route)
+
+        router._post_json = fake_post_json  # type: ignore[method-assign]
+        finding_a = Finding(
+            plugin="impact_validator",
+            target="capital.com",
+            category="critical_public_data_exposure",
+            severity="critical",
+            title="critical public data exposure",
+            evidence={"endpoint": "/?id=1001"},
+            metadata={"impact": 96, "confidence_score": 98},
+        )
+        finding_b = Finding(
+            plugin="impact_validator",
+            target="capital.com",
+            category="critical_public_data_exposure",
+            severity="critical",
+            title="critical public data exposure",
+            evidence={"endpoint": "/?id=1002&email=test@example.com"},
+            metadata={"impact": 96, "confidence_score": 98},
+        )
+        first = await router.send_finding(finding_a, run_id="run-3", source="unit")
+        second = await router.send_finding(finding_b, run_id="run-3", source="unit")
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(len(captured), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
-

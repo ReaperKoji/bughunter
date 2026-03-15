@@ -1,0 +1,43 @@
+capital_24h_runner_start targets=config/targets/admissions_in_scope_hosts.txt out_dir=data/reports/research/capital_24h log=data/logs/capital_24h_20260308_234957.log max_hours=24
+run_start run_id=20260308_234957_capital24h_1 iteration=1
+[2026-03-08T23:49:57.254802Z] research_pipeline_starting config=config/engine.yaml out_dir=data/reports/research/capital_24h
+[2026-03-08T23:49:57.254993Z] uvloop_install_result enabled=0 policy=_UnixDefaultEventLoopPolicy
+{"ts": "2026-03-08T23:49:57.256600Z", "level": "INFO", "logger": "hunterops", "message": "bootstrap_started run_id=20260308_234957_capital24h_1 config=/opt/hunterops/config/engine.yaml data_dir=/opt/hunterops/data out_dir=/opt/hunterops/data/reports/research/capital_24h event_loop=_UnixSelectorEventLoop policy=_UnixDefaultEventLoopPolicy"}
+{"ts": "2026-03-08T23:49:57.301939Z", "level": "INFO", "logger": "hunterops", "message": "startup_write_check_ok path=/opt/hunterops/data"}
+{"ts": "2026-03-08T23:49:57.302245Z", "level": "INFO", "logger": "hunterops", "message": "triage_policy actionable_min_severity=low actionable_min_confidence=55.0 actionable_min_impact=35.0 allow_correlation_alerts=0"}
+{"ts": "2026-03-08T23:49:57.302360Z", "level": "INFO", "logger": "hunterops", "message": "startup_http_pool_configured max_connections=160 keepalive=48"}
+{"ts": "2026-03-08T23:49:57.302407Z", "level": "INFO", "logger": "hunterops", "message": "startup_http_global_limit_configured rps=10.0 max_inflight=10"}
+[2026-03-08T23:49:57.462601Z] fatal_startup_or_runtime_error type=RuntimeError err=postgres_connection_failed env=HUNTEROPS_POSTGRES_DSN err=OperationalError: failed to resolve host 'db': [Errno -3] Temporary failure in name resolution
+Traceback (most recent call last):
+  File "/opt/hunterops/scripts/research_pipeline.py", line 2514, in run_async
+    storage.ensure_research_schema()
+  File "/opt/hunterops/hunterops/storage.py", line 222, in ensure_research_schema
+    self.connect()
+  File "/opt/hunterops/hunterops/storage.py", line 165, in connect
+    self._conn = psycopg.connect(self.dsn, connect_timeout=connect_timeout, options=options)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hunterops/.venv/lib/python3.12/site-packages/psycopg/connection.py", line 100, in connect
+    attempts = conninfo_attempts(params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hunterops/.venv/lib/python3.12/site-packages/psycopg/_conninfo_attempts.py", line 55, in conninfo_attempts
+    raise last_exc
+psycopg.OperationalError: failed to resolve host 'db': [Errno -3] Temporary failure in name resolution
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hunterops/scripts/research_pipeline.py", line 3371, in main
+    return asyncio.run(run_async(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/opt/hunterops/scripts/research_pipeline.py", line 2517, in run_async
+    raise RuntimeError(f"postgres_connection_failed env={dsn_env} err={type(err).__name__}: {err}") from err
+RuntimeError: postgres_connection_failed env=HUNTEROPS_POSTGRES_DSN err=OperationalError: failed to resolve host 'db': [Errno -3] Temporary failure in name resolution

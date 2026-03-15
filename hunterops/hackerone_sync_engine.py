@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +10,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from hunterops.runtime_paths import ensure_directory, resolve_path
+from hunterops.secrets import read_secret
 
 _PUBLIC_BOUNTY_PROGRAMS_QUERY = """
 query PublicBountyPrograms($after: String) {
@@ -127,8 +127,8 @@ class HackerOneSyncEngine:
         resolved_targets = configured_targets or targets_file or "targets.txt"
         self.targets_file: Path = resolve_path(resolved_targets, prefer_existing=False)
         self.strict_sync = bool(self.cfg.get("strict_sync", False))
-        self.api_identifier = os.getenv("H1_API_IDENTIFIER", "").strip()
-        self.api_token = os.getenv("H1_API_TOKEN", "").strip()
+        self.api_identifier = read_secret("H1_API_IDENTIFIER")
+        self.api_token = read_secret("H1_API_TOKEN")
 
     @property
     def available(self) -> bool:

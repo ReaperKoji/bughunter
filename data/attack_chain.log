@@ -1,0 +1,194 @@
+{"ts": "2026-03-10T14:58:12.117732Z", "level": "ERROR", "logger": "hunterops", "message": "attack_chain_preflight_failed"}
+{"ts": "2026-03-10T15:00:49.607871Z", "level": "ERROR", "logger": "hunterops", "message": "attack_chain_preflight_failed"}
+{"ts": "2026-03-10T15:01:16.594281Z", "level": "ERROR", "logger": "hunterops", "message": "attack_chain_preflight_failed"}
+{"ts": "2026-03-10T15:03:23.076814Z", "level": "ERROR", "logger": "hunterops", "message": "attack_chain_preflight_failed"}
+{"ts": "2026-03-10T15:03:36.676510Z", "level": "ERROR", "logger": "hunterops", "message": "attack_chain_preflight_failed"}
+{"ts": "2026-03-10T15:03:58.463933Z", "level": "ERROR", "logger": "hunterops", "message": "attack_chain_preflight_failed"}
+{"ts": "2026-03-10T15:49:03.411398Z", "level": "ERROR", "logger": "hunterops", "message": "attack_chain_preflight_failed"}
+{"ts": "2026-03-15T00:25:17.407811Z", "level": "ERROR", "logger": "hunterops", "message": "attack_chain_preflight_failed"}
+{"ts": "2026-03-15T00:25:32.422516Z", "level": "INFO", "logger": "hunterops", "message": "batch_heartbeat pending_tasks=1 elapsed=27.1s sample=recon_engine@open-api.capital.com"}
+{"ts": "2026-03-15T00:25:47.423340Z", "level": "INFO", "logger": "hunterops", "message": "batch_heartbeat pending_tasks=1 elapsed=42.1s sample=recon_engine@open-api.capital.com"}
+{"ts": "2026-03-15T00:26:02.424110Z", "level": "INFO", "logger": "hunterops", "message": "batch_heartbeat pending_tasks=1 elapsed=57.1s sample=recon_engine@open-api.capital.com"}
+{"ts": "2026-03-15T00:26:13.930237Z", "level": "INFO", "logger": "hunterops", "message": "pipeline_task_slow_complete plugin=recon_engine target=open-api.capital.com elapsed=65.33s findings=1"}
+{"ts": "2026-03-15T00:26:13.955431Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=asset_discovery_engine calls=1 errors=0 avg_latency=17.49s"}
+{"ts": "2026-03-15T00:26:13.955542Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=attack_chain_seed calls=1 errors=0 avg_latency=0.03s"}
+{"ts": "2026-03-15T00:26:13.955581Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=auth_matrix_engine calls=1 errors=0 avg_latency=3.01s"}
+{"ts": "2026-03-15T00:26:13.955621Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=cors calls=1 errors=0 avg_latency=0.53s"}
+{"ts": "2026-03-15T00:26:13.955678Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=crawler_intelligent calls=1 errors=0 avg_latency=1.84s"}
+{"ts": "2026-03-15T00:26:13.955734Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=deep_js_analyzer calls=1 errors=0 avg_latency=5.30s"}
+{"ts": "2026-03-15T00:26:13.955793Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=deep_js_intelligence calls=1 errors=0 avg_latency=5.06s"}
+{"ts": "2026-03-15T00:26:13.955853Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=graphql_scan calls=1 errors=0 avg_latency=0.74s"}
+{"ts": "2026-03-15T00:26:13.955917Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=hidden_route_detector calls=1 errors=0 avg_latency=29.70s"}
+{"ts": "2026-03-15T00:26:13.955991Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=hidden_route_discovery calls=1 errors=0 avg_latency=31.73s"}
+{"ts": "2026-03-15T00:26:13.956051Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=intelligent_crawler calls=1 errors=0 avg_latency=0.55s"}
+{"ts": "2026-03-15T00:26:13.956117Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=javascript_deep_analysis calls=1 errors=0 avg_latency=2.15s"}
+{"ts": "2026-03-15T00:26:13.956185Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=js_route_mapper calls=1 errors=0 avg_latency=0.61s"}
+{"ts": "2026-03-15T00:26:13.956242Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=logic_prover calls=1 errors=0 avg_latency=2.46s"}
+{"ts": "2026-03-15T00:26:13.956300Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=parameter_enum calls=1 errors=0 avg_latency=1.94s"}
+{"ts": "2026-03-15T00:26:13.956386Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=recon_engine calls=1 errors=0 avg_latency=65.33s"}
+{"ts": "2026-03-15T00:26:13.956449Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=surface_expansion calls=1 errors=0 avg_latency=3.91s"}
+{"ts": "2026-03-15T00:26:13.956512Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=surface_mapper calls=1 errors=0 avg_latency=0.80s"}
+{"ts": "2026-03-15T00:26:13.956574Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=takeover calls=1 errors=0 avg_latency=0.00s"}
+{"ts": "2026-03-15T00:26:13.956638Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=undocumented_api calls=1 errors=0 avg_latency=1.45s"}
+{"ts": "2026-03-15T00:26:13.972761Z", "level": "INFO", "logger": "hunterops", "message": "adaptive_level_change target=open-api.capital.com round=2 from=2 to=3 reason=clean_rounds=1"}
+{"ts": "2026-03-15T00:26:13.972859Z", "level": "INFO", "logger": "hunterops", "message": "target_round_end target=open-api.capital.com round=2 level=3 recursion_depth=6 round_findings=5 round_feedback_events=0 round_timeouts=0 pending_next=2 target_findings_total=13"}
+{"ts": "2026-03-15T00:26:13.974358Z", "level": "INFO", "logger": "hunterops", "message": "target_round_start target=open-api.capital.com round=3 level=3 wave_tasks=2 pending_after_pop=0 processed_tasks=22"}
+{"ts": "2026-03-15T00:26:17.142245Z", "level": "ERROR", "logger": "hunterops", "message": "attack_chain_preflight_failed"}
+{"ts": "2026-03-15T00:26:17.189806Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=asset_discovery_engine calls=1 errors=0 avg_latency=17.49s"}
+{"ts": "2026-03-15T00:26:17.189917Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=attack_chain_seed calls=2 errors=0 avg_latency=0.03s"}
+{"ts": "2026-03-15T00:26:17.189967Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=auth_matrix_engine calls=1 errors=0 avg_latency=3.01s"}
+{"ts": "2026-03-15T00:26:17.190021Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=cors calls=1 errors=0 avg_latency=0.53s"}
+{"ts": "2026-03-15T00:26:17.190081Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=crawler_intelligent calls=1 errors=0 avg_latency=1.84s"}
+{"ts": "2026-03-15T00:26:17.190147Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=deep_js_analyzer calls=1 errors=0 avg_latency=5.30s"}
+{"ts": "2026-03-15T00:26:17.190206Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=deep_js_intelligence calls=1 errors=0 avg_latency=5.06s"}
+{"ts": "2026-03-15T00:26:17.190256Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=entity_cross_pollinator calls=1 errors=0 avg_latency=3.01s"}
+{"ts": "2026-03-15T00:26:17.190314Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=graphql_scan calls=1 errors=0 avg_latency=0.74s"}
+{"ts": "2026-03-15T00:26:17.190372Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=hidden_route_detector calls=1 errors=0 avg_latency=29.70s"}
+{"ts": "2026-03-15T00:26:17.190422Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=hidden_route_discovery calls=1 errors=0 avg_latency=31.73s"}
+{"ts": "2026-03-15T00:26:17.190484Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=intelligent_crawler calls=1 errors=0 avg_latency=0.55s"}
+{"ts": "2026-03-15T00:26:17.190542Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=javascript_deep_analysis calls=1 errors=0 avg_latency=2.15s"}
+{"ts": "2026-03-15T00:26:17.190593Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=js_route_mapper calls=1 errors=0 avg_latency=0.61s"}
+{"ts": "2026-03-15T00:26:17.190646Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=logic_prover calls=1 errors=0 avg_latency=2.46s"}
+{"ts": "2026-03-15T00:26:17.190705Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=parameter_enum calls=1 errors=0 avg_latency=1.94s"}
+{"ts": "2026-03-15T00:26:17.190744Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=recon_engine calls=1 errors=0 avg_latency=65.33s"}
+{"ts": "2026-03-15T00:26:17.190786Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=surface_expansion calls=1 errors=0 avg_latency=3.91s"}
+{"ts": "2026-03-15T00:26:17.190829Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=surface_mapper calls=1 errors=0 avg_latency=0.80s"}
+{"ts": "2026-03-15T00:26:17.190866Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=takeover calls=1 errors=0 avg_latency=0.00s"}
+{"ts": "2026-03-15T00:26:17.190903Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=undocumented_api calls=1 errors=0 avg_latency=1.45s"}
+{"ts": "2026-03-15T00:26:17.194738Z", "level": "INFO", "logger": "hunterops", "message": "target_round_end target=open-api.capital.com round=3 level=3 recursion_depth=6 round_findings=1 round_feedback_events=0 round_timeouts=0 pending_next=0 target_findings_total=14"}
+{"ts": "2026-03-15T00:26:17.194859Z", "level": "INFO", "logger": "hunterops", "message": "target_scan_completed target=open-api.capital.com rounds=3 processed_tasks=22 target_findings=14"}
+{"ts": "2026-03-15T00:26:17.194928Z", "level": "INFO", "logger": "hunterops", "message": "target_scan_start target=payment.backend-capital.com"}
+{"ts": "2026-03-15T00:26:17.687170Z", "level": "WARNING", "logger": "hunterops", "message": "session_guardian_event target=payment.backend-capital.com session=user status=stale reason=vault_credentials_missing:user refresh_ok=0"}
+{"ts": "2026-03-15T00:26:17.687287Z", "level": "WARNING", "logger": "hunterops", "message": "session_guardian_event target=payment.backend-capital.com session=user_b status=stale reason=vault_credentials_missing:user_b refresh_ok=0"}
+{"ts": "2026-03-15T00:26:17.689078Z", "level": "INFO", "logger": "hunterops", "message": "target_round_start target=payment.backend-capital.com round=1 level=1 wave_tasks=12 pending_after_pop=5 processed_tasks=12"}
+{"ts": "2026-03-15T00:26:34.468539Z", "level": "INFO", "logger": "hunterops", "message": "batch_heartbeat pending_tasks=10 elapsed=16.8s sample=asset_discovery_engine@payment.backend-capital.com;deep_js_analyzer@payment.backend-capital.com;deep_js_intelligence@payment.backend-capital.com"}
+{"ts": "2026-03-15T00:26:37.004329Z", "level": "INFO", "logger": "hunterops", "message": "pipeline_task_slow_complete plugin=deep_js_analyzer target=payment.backend-capital.com elapsed=17.48s findings=1"}
+{"ts": "2026-03-15T00:26:45.889840Z", "level": "INFO", "logger": "hunterops", "message": "pipeline_task_slow_complete plugin=asset_discovery_engine target=payment.backend-capital.com elapsed=27.93s findings=1"}
+{"ts": "2026-03-15T00:26:47.693373Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=asset_discovery_engine calls=2 errors=0 avg_latency=22.71s"}
+{"ts": "2026-03-15T00:26:47.693503Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=attack_chain_seed calls=2 errors=0 avg_latency=0.03s"}
+{"ts": "2026-03-15T00:26:47.693590Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=auth_matrix_engine calls=1 errors=0 avg_latency=3.01s"}
+{"ts": "2026-03-15T00:26:47.693655Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=cors calls=2 errors=0 avg_latency=0.34s"}
+{"ts": "2026-03-15T00:26:47.693725Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=crawler_intelligent calls=2 errors=0 avg_latency=1.41s"}
+{"ts": "2026-03-15T00:26:47.693780Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=deep_js_analyzer calls=2 errors=0 avg_latency=11.39s"}
+{"ts": "2026-03-15T00:26:47.693857Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=deep_js_intelligence calls=2 errors=0 avg_latency=3.18s"}
+{"ts": "2026-03-15T00:26:47.693906Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=entity_cross_pollinator calls=1 errors=0 avg_latency=3.01s"}
+{"ts": "2026-03-15T00:26:47.693972Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=graphql_scan calls=2 errors=0 avg_latency=0.47s"}
+{"ts": "2026-03-15T00:26:47.694047Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=hidden_route_detector calls=2 errors=0 avg_latency=15.50s"}
+{"ts": "2026-03-15T00:26:47.694119Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=hidden_route_discovery calls=2 errors=0 avg_latency=18.95s"}
+{"ts": "2026-03-15T00:26:47.694200Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=intelligent_crawler calls=2 errors=0 avg_latency=0.55s"}
+{"ts": "2026-03-15T00:26:47.694292Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=javascript_deep_analysis calls=2 errors=0 avg_latency=1.50s"}
+{"ts": "2026-03-15T00:26:47.694357Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=js_route_mapper calls=2 errors=0 avg_latency=0.42s"}
+{"ts": "2026-03-15T00:26:47.694420Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=logic_prover calls=1 errors=0 avg_latency=2.46s"}
+{"ts": "2026-03-15T00:26:47.694487Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=parameter_enum calls=2 errors=0 avg_latency=1.35s"}
+{"ts": "2026-03-15T00:26:47.694556Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=recon_engine calls=1 errors=0 avg_latency=65.33s"}
+{"ts": "2026-03-15T00:26:47.694621Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=surface_expansion calls=1 errors=0 avg_latency=3.91s"}
+{"ts": "2026-03-15T00:26:47.694692Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=surface_mapper calls=1 errors=0 avg_latency=0.80s"}
+{"ts": "2026-03-15T00:26:47.694759Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=takeover calls=1 errors=0 avg_latency=0.00s"}
+{"ts": "2026-03-15T00:26:47.694824Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=undocumented_api calls=1 errors=0 avg_latency=1.45s"}
+{"ts": "2026-03-15T00:26:47.697643Z", "level": "WARNING", "logger": "hunterops", "message": "adaptive_backoff_applied target=payment.backend-capital.com status=403 cooldown=1.95"}
+{"ts": "2026-03-15T00:26:47.712163Z", "level": "INFO", "logger": "hunterops", "message": "target_round_end target=payment.backend-capital.com round=1 level=1 recursion_depth=6 round_findings=8 round_feedback_events=1 round_timeouts=0 pending_next=22 target_findings_total=8"}
+{"ts": "2026-03-15T00:26:47.713512Z", "level": "INFO", "logger": "hunterops", "message": "target_round_start target=payment.backend-capital.com round=2 level=1 wave_tasks=12 pending_after_pop=10 processed_tasks=24"}
+{"ts": "2026-03-15T00:27:13.058434Z", "level": "INFO", "logger": "hunterops", "message": "batch_heartbeat pending_tasks=1 elapsed=25.3s sample=auth_matrix_engine@payment.backend-capital.com"}
+{"ts": "2026-03-15T00:27:28.061395Z", "level": "INFO", "logger": "hunterops", "message": "batch_heartbeat pending_tasks=1 elapsed=40.3s sample=auth_matrix_engine@payment.backend-capital.com"}
+{"ts": "2026-03-15T00:27:43.062538Z", "level": "INFO", "logger": "hunterops", "message": "batch_heartbeat pending_tasks=1 elapsed=55.3s sample=auth_matrix_engine@payment.backend-capital.com"}
+{"ts": "2026-03-15T00:27:51.748273Z", "level": "INFO", "logger": "hunterops", "message": "pipeline_task_slow_complete plugin=auth_matrix_engine target=payment.backend-capital.com elapsed=58.75s findings=0"}
+{"ts": "2026-03-15T00:27:51.750771Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=asset_discovery_engine calls=2 errors=0 avg_latency=22.71s"}
+{"ts": "2026-03-15T00:27:51.750891Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=attack_chain_seed calls=2 errors=0 avg_latency=0.03s"}
+{"ts": "2026-03-15T00:27:51.750964Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=auth_matrix_engine calls=2 errors=0 avg_latency=30.88s"}
+{"ts": "2026-03-15T00:27:51.751032Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=cors calls=2 errors=0 avg_latency=0.34s"}
+{"ts": "2026-03-15T00:27:51.751105Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=crawler_intelligent calls=2 errors=0 avg_latency=1.41s"}
+{"ts": "2026-03-15T00:27:51.751203Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=deep_js_analyzer calls=2 errors=0 avg_latency=11.39s"}
+{"ts": "2026-03-15T00:27:51.751275Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=deep_js_intelligence calls=2 errors=0 avg_latency=3.18s"}
+{"ts": "2026-03-15T00:27:51.751366Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=entity_cross_pollinator calls=2 errors=0 avg_latency=3.01s"}
+{"ts": "2026-03-15T00:27:51.751444Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=graphql_scan calls=2 errors=0 avg_latency=0.47s"}
+{"ts": "2026-03-15T00:27:51.751528Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=hidden_route_detector calls=2 errors=0 avg_latency=15.50s"}
+{"ts": "2026-03-15T00:27:51.751588Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=hidden_route_discovery calls=2 errors=0 avg_latency=18.95s"}
+{"ts": "2026-03-15T00:27:51.751634Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=intelligent_crawler calls=2 errors=0 avg_latency=0.55s"}
+{"ts": "2026-03-15T00:27:51.751681Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=javascript_deep_analysis calls=2 errors=0 avg_latency=1.50s"}
+{"ts": "2026-03-15T00:27:51.751730Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=js_route_mapper calls=2 errors=0 avg_latency=0.42s"}
+{"ts": "2026-03-15T00:27:51.751780Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=logic_prover calls=2 errors=0 avg_latency=2.73s"}
+{"ts": "2026-03-15T00:27:51.751833Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=parameter_enum calls=2 errors=0 avg_latency=1.35s"}
+{"ts": "2026-03-15T00:27:51.751948Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=parameter_intelligence calls=1 errors=0 avg_latency=5.35s"}
+{"ts": "2026-03-15T00:27:51.752028Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=recon_engine calls=1 errors=0 avg_latency=65.33s"}
+{"ts": "2026-03-15T00:27:51.752118Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=surface_expansion calls=1 errors=0 avg_latency=3.91s"}
+{"ts": "2026-03-15T00:27:51.752269Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=surface_mapper calls=1 errors=0 avg_latency=0.80s"}
+{"ts": "2026-03-15T00:27:51.752408Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=takeover calls=1 errors=0 avg_latency=0.00s"}
+{"ts": "2026-03-15T00:27:51.752500Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=undocumented_api calls=1 errors=0 avg_latency=1.45s"}
+{"ts": "2026-03-15T00:27:51.755345Z", "level": "INFO", "logger": "hunterops", "message": "adaptive_level_change target=payment.backend-capital.com round=2 from=1 to=2 reason=clean_rounds=1"}
+{"ts": "2026-03-15T00:27:51.755460Z", "level": "INFO", "logger": "hunterops", "message": "target_round_end target=payment.backend-capital.com round=2 level=2 recursion_depth=6 round_findings=0 round_feedback_events=0 round_timeouts=0 pending_next=10 target_findings_total=8"}
+{"ts": "2026-03-15T00:27:51.756800Z", "level": "INFO", "logger": "hunterops", "message": "target_round_start target=payment.backend-capital.com round=3 level=2 wave_tasks=10 pending_after_pop=0 processed_tasks=34"}
+{"ts": "2026-03-15T00:27:51.816711Z", "level": "WARNING", "logger": "hunterops", "message": "recon_engine_missing_binaries subfinder:/usr/local/bin/subfinder,httpx:/usr/local/bin/httpx"}
+{"ts": "2026-03-15T00:27:56.011131Z", "level": "ERROR", "logger": "hunterops", "message": "attack_chain_preflight_failed"}
+{"ts": "2026-03-15T00:28:11.076846Z", "level": "INFO", "logger": "hunterops", "message": "batch_heartbeat pending_tasks=1 elapsed=19.3s sample=recon_engine@payment.backend-capital.com"}
+{"ts": "2026-03-15T00:28:26.080464Z", "level": "INFO", "logger": "hunterops", "message": "batch_heartbeat pending_tasks=1 elapsed=34.3s sample=recon_engine@payment.backend-capital.com"}
+{"ts": "2026-03-15T00:28:34.208626Z", "level": "INFO", "logger": "hunterops", "message": "pipeline_task_slow_complete plugin=recon_engine target=payment.backend-capital.com elapsed=42.39s findings=1"}
+{"ts": "2026-03-15T00:28:34.214453Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=asset_discovery_engine calls=2 errors=0 avg_latency=22.71s"}
+{"ts": "2026-03-15T00:28:34.214549Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=attack_chain_seed calls=3 errors=0 avg_latency=0.02s"}
+{"ts": "2026-03-15T00:28:34.214613Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=auth_matrix_engine calls=2 errors=0 avg_latency=30.88s"}
+{"ts": "2026-03-15T00:28:34.214665Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=cors calls=2 errors=0 avg_latency=0.34s"}
+{"ts": "2026-03-15T00:28:34.214712Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=crawler_intelligent calls=2 errors=0 avg_latency=1.41s"}
+{"ts": "2026-03-15T00:28:34.214754Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=deep_js_analyzer calls=2 errors=0 avg_latency=11.39s"}
+{"ts": "2026-03-15T00:28:34.214818Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=deep_js_intelligence calls=2 errors=0 avg_latency=3.18s"}
+{"ts": "2026-03-15T00:28:34.214882Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=entity_cross_pollinator calls=2 errors=0 avg_latency=3.01s"}
+{"ts": "2026-03-15T00:28:34.214941Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=graphql_scan calls=2 errors=0 avg_latency=0.47s"}
+{"ts": "2026-03-15T00:28:34.215015Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=hidden_route_detector calls=2 errors=0 avg_latency=15.50s"}
+{"ts": "2026-03-15T00:28:34.215080Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=hidden_route_discovery calls=2 errors=0 avg_latency=18.95s"}
+{"ts": "2026-03-15T00:28:34.215145Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=intelligent_crawler calls=2 errors=0 avg_latency=0.55s"}
+{"ts": "2026-03-15T00:28:34.215222Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=javascript_deep_analysis calls=2 errors=0 avg_latency=1.50s"}
+{"ts": "2026-03-15T00:28:34.215283Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=js_route_mapper calls=2 errors=0 avg_latency=0.42s"}
+{"ts": "2026-03-15T00:28:34.215346Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=logic_prover calls=2 errors=0 avg_latency=2.73s"}
+{"ts": "2026-03-15T00:28:34.215410Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=parameter_enum calls=2 errors=0 avg_latency=1.35s"}
+{"ts": "2026-03-15T00:28:34.215472Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=parameter_intelligence calls=1 errors=0 avg_latency=5.35s"}
+{"ts": "2026-03-15T00:28:34.215533Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=recon_engine calls=2 errors=0 avg_latency=53.86s"}
+{"ts": "2026-03-15T00:28:34.215593Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=surface_expansion calls=2 errors=0 avg_latency=3.08s"}
+{"ts": "2026-03-15T00:28:34.215667Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=surface_mapper calls=2 errors=0 avg_latency=0.68s"}
+{"ts": "2026-03-15T00:28:34.215728Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=takeover calls=2 errors=0 avg_latency=0.00s"}
+{"ts": "2026-03-15T00:28:34.215782Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=undocumented_api calls=2 errors=0 avg_latency=1.10s"}
+{"ts": "2026-03-15T00:28:34.217969Z", "level": "WARNING", "logger": "hunterops", "message": "adaptive_backoff_applied target=payment.backend-capital.com status=403 cooldown=1.95"}
+{"ts": "2026-03-15T00:28:34.231628Z", "level": "INFO", "logger": "hunterops", "message": "adaptive_level_change target=payment.backend-capital.com round=3 from=2 to=1 reason=feedback=1"}
+{"ts": "2026-03-15T00:28:34.231755Z", "level": "INFO", "logger": "hunterops", "message": "target_round_end target=payment.backend-capital.com round=3 level=1 recursion_depth=6 round_findings=5 round_feedback_events=1 round_timeouts=0 pending_next=11 target_findings_total=13"}
+{"ts": "2026-03-15T00:28:34.233192Z", "level": "INFO", "logger": "hunterops", "message": "target_round_start target=payment.backend-capital.com round=4 level=1 wave_tasks=11 pending_after_pop=0 processed_tasks=45"}
+{"ts": "2026-03-15T00:28:36.229287Z", "level": "ERROR", "logger": "hunterops", "message": "attack_chain_preflight_failed"}
+{"ts": "2026-03-15T00:28:36.284155Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=asset_discovery_engine calls=2 errors=0 avg_latency=22.71s"}
+{"ts": "2026-03-15T00:28:36.284263Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=attack_chain_seed calls=4 errors=0 avg_latency=0.02s"}
+{"ts": "2026-03-15T00:28:36.284316Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=auth_matrix_engine calls=2 errors=0 avg_latency=30.88s"}
+{"ts": "2026-03-15T00:28:36.284360Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=cors calls=2 errors=0 avg_latency=0.34s"}
+{"ts": "2026-03-15T00:28:36.284429Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=crawler_intelligent calls=2 errors=0 avg_latency=1.41s"}
+{"ts": "2026-03-15T00:28:36.284489Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=deep_js_analyzer calls=2 errors=0 avg_latency=11.39s"}
+{"ts": "2026-03-15T00:28:36.284540Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=deep_js_intelligence calls=2 errors=0 avg_latency=3.18s"}
+{"ts": "2026-03-15T00:28:36.284577Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=entity_cross_pollinator calls=2 errors=0 avg_latency=3.01s"}
+{"ts": "2026-03-15T00:28:36.284645Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=graphql_scan calls=2 errors=0 avg_latency=0.47s"}
+{"ts": "2026-03-15T00:28:36.284706Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=hidden_route_detector calls=2 errors=0 avg_latency=15.50s"}
+{"ts": "2026-03-15T00:28:36.284775Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=hidden_route_discovery calls=2 errors=0 avg_latency=18.95s"}
+{"ts": "2026-03-15T00:28:36.284848Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=intelligent_crawler calls=2 errors=0 avg_latency=0.55s"}
+{"ts": "2026-03-15T00:28:36.284909Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=javascript_deep_analysis calls=2 errors=0 avg_latency=1.50s"}
+{"ts": "2026-03-15T00:28:36.284972Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=js_route_mapper calls=2 errors=0 avg_latency=0.42s"}
+{"ts": "2026-03-15T00:28:36.285037Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=logic_prover calls=2 errors=0 avg_latency=2.73s"}
+{"ts": "2026-03-15T00:28:36.285111Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=parameter_enum calls=2 errors=0 avg_latency=1.35s"}
+{"ts": "2026-03-15T00:28:36.285199Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=parameter_intelligence calls=1 errors=0 avg_latency=5.35s"}
+{"ts": "2026-03-15T00:28:36.285272Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=recon_engine calls=2 errors=0 avg_latency=53.86s"}
+{"ts": "2026-03-15T00:28:36.285339Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=surface_expansion calls=2 errors=0 avg_latency=3.08s"}
+{"ts": "2026-03-15T00:28:36.285403Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=surface_mapper calls=2 errors=0 avg_latency=0.68s"}
+{"ts": "2026-03-15T00:28:36.285470Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=takeover calls=2 errors=0 avg_latency=0.00s"}
+{"ts": "2026-03-15T00:28:36.285548Z", "level": "INFO", "logger": "hunterops", "message": "plugin_metrics plugin=undocumented_api calls=2 errors=0 avg_latency=1.10s"}
+{"ts": "2026-03-15T00:28:36.290395Z", "level": "INFO", "logger": "hunterops", "message": "adaptive_level_change target=payment.backend-capital.com round=4 from=1 to=2 reason=clean_rounds=1"}
+{"ts": "2026-03-15T00:28:36.290520Z", "level": "INFO", "logger": "hunterops", "message": "target_round_end target=payment.backend-capital.com round=4 level=2 recursion_depth=6 round_findings=1 round_feedback_events=0 round_timeouts=0 pending_next=0 target_findings_total=14"}
+{"ts": "2026-03-15T00:28:36.290618Z", "level": "INFO", "logger": "hunterops", "message": "target_scan_completed target=payment.backend-capital.com rounds=4 processed_tasks=45 target_findings=14"}
+{"ts": "2026-03-15T00:28:39.332723Z", "level": "INFO", "logger": "hunterops", "message": "shannon_validation_start target=payment.backend-capital.com endpoint=/ finding_key=26bc5a49a67b4cc012cbd28996cf51e915cc25a50b37b98eb22a22d18c93d955"}
+{"ts": "2026-03-15T00:28:39.343196Z", "level": "ERROR", "logger": "hunterops", "message": "shannon_validation_failed target=payment.backend-capital.com endpoint=/ finding_key=26bc5a49a67b4cc012cbd28996cf51e915cc25a50b37b98eb22a22d18c93d955 exit_code=0 err=validator_not_validated"}
+{"ts": "2026-03-15T00:28:39.343299Z", "level": "INFO", "logger": "hunterops", "message": "shannon_validation_start target=payment.backend-capital.com endpoint=/ finding_key=29a1a433d1c0b8e2d02c852ff5cc5e95b426ec3bfdc685ab5c46cdd293ac872b"}
+{"ts": "2026-03-15T00:28:39.354204Z", "level": "ERROR", "logger": "hunterops", "message": "shannon_validation_failed target=payment.backend-capital.com endpoint=/ finding_key=29a1a433d1c0b8e2d02c852ff5cc5e95b426ec3bfdc685ab5c46cdd293ac872b exit_code=0 err=validator_not_validated"}
+{"ts": "2026-03-15T00:28:39.354274Z", "level": "INFO", "logger": "hunterops", "message": "shannon_validation_start target=open-api.capital.com endpoint=/ finding_key=d8fa8142460abbc8d403b8403acdae71185b3dcf23b2b702ba199a247c1e0a6e"}
+{"ts": "2026-03-15T00:28:39.365259Z", "level": "ERROR", "logger": "hunterops", "message": "shannon_validation_failed target=open-api.capital.com endpoint=/ finding_key=d8fa8142460abbc8d403b8403acdae71185b3dcf23b2b702ba199a247c1e0a6e exit_code=0 err=validator_not_validated"}
+{"ts": "2026-03-15T00:28:39.365354Z", "level": "INFO", "logger": "hunterops", "message": "shannon_validation_start target=payment.backend-capital.com endpoint=/ finding_key=3ad26e35a5ca60a758a9ff502825c12be482dba3b3be25c97dcf3b413640ddbb"}
+{"ts": "2026-03-15T00:28:39.376236Z", "level": "ERROR", "logger": "hunterops", "message": "shannon_validation_failed target=payment.backend-capital.com endpoint=/ finding_key=3ad26e35a5ca60a758a9ff502825c12be482dba3b3be25c97dcf3b413640ddbb exit_code=0 err=validator_not_validated"}
+{"ts": "2026-03-15T00:28:39.376312Z", "level": "INFO", "logger": "hunterops", "message": "shannon_validation_start target=open-api.capital.com endpoint=/ finding_key=c36845edb2c282eb447b9ee8bd21d992bc6a2ea558c1cc17332a37d45130a58a"}
+{"ts": "2026-03-15T00:28:39.386800Z", "level": "ERROR", "logger": "hunterops", "message": "shannon_validation_failed target=open-api.capital.com endpoint=/ finding_key=c36845edb2c282eb447b9ee8bd21d992bc6a2ea558c1cc17332a37d45130a58a exit_code=0 err=validator_not_validated"}
+{"ts": "2026-03-15T00:28:39.386904Z", "level": "INFO", "logger": "hunterops", "message": "shannon_validation_start target=payment.backend-capital.com endpoint=/ finding_key=2430eb31afcc7c0ce7819507eb24235240a67192f2066adaf952996471c78710"}
+{"ts": "2026-03-15T00:28:39.400818Z", "level": "ERROR", "logger": "hunterops", "message": "shannon_validation_failed target=payment.backend-capital.com endpoint=/ finding_key=2430eb31afcc7c0ce7819507eb24235240a67192f2066adaf952996471c78710 exit_code=0 err=validator_not_validated"}
+{"ts": "2026-03-15T00:28:39.400921Z", "level": "INFO", "logger": "hunterops", "message": "shannon_validation_start target=open-api.capital.com endpoint=/unknown finding_key=e570ffd8018e53f1f60d7a0805ee0f95d7888ce9b8dee8c6997ccd4cb6eecef8"}
+{"ts": "2026-03-15T00:28:39.411967Z", "level": "ERROR", "logger": "hunterops", "message": "shannon_validation_failed target=open-api.capital.com endpoint=/unknown finding_key=e570ffd8018e53f1f60d7a0805ee0f95d7888ce9b8dee8c6997ccd4cb6eecef8 exit_code=0 err=validator_not_validated"}
+{"ts": "2026-03-15T00:28:39.412099Z", "level": "INFO", "logger": "hunterops", "message": "shannon_validation_start target=payment.backend-capital.com endpoint=/unknown finding_key=ee734e1c30e00f4dfbd004dc94df682c84201d4f21a0812309310dc610133835"}
+{"ts": "2026-03-15T00:28:39.424554Z", "level": "ERROR", "logger": "hunterops", "message": "shannon_validation_failed target=payment.backend-capital.com endpoint=/unknown finding_key=ee734e1c30e00f4dfbd004dc94df682c84201d4f21a0812309310dc610133835 exit_code=0 err=validator_not_validated"}
+{"ts": "2026-03-15T00:28:39.441052Z", "level": "INFO", "logger": "hunterops", "message": "metrics_snapshot_written path=/opt/hunterops/data/reports/research/runs/20260315_002414/metrics/metrics_20260315_002414.txt"}
+{"ts": "2026-03-15T00:28:39.446256Z", "level": "INFO", "logger": "hunterops", "message": "research_pipeline_completed run_id=20260315_002414 findings=34 actionable=0 review_queue=34 validated=0"}

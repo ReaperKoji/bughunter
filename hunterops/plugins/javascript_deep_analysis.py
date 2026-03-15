@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qs, urljoin, urlparse
 
+from hunterops.endpoint_cache import EndpointCache
 from hunterops.http_client import request_http_async
 from hunterops.plugin_base import Plugin
 from hunterops.types import Finding, Task
@@ -68,6 +69,18 @@ class PluginImpl(Plugin):
                 for k in parse_qs(up.query).keys():
                     params.add(k)
 
+        cache = context.get("endpoint_cache")
+        known_endpoints: list[str] = []
+        if isinstance(cache, EndpointCache) and endpoints:
+            new_endpoints: list[str] = []
+            for ep in sorted(endpoints):
+                if cache.was_seen(plugin=self.name, target=task.target, endpoint=ep):
+                    known_endpoints.append(ep)
+                else:
+                    new_endpoints.append(ep)
+            if new_endpoints:
+                cache.mark_many(plugin=self.name, target=task.target, endpoints=new_endpoints)
+            endpoints = set(new_endpoints)
         if not endpoints and not internal_urls:
             return []
         return [
@@ -80,6 +93,7 @@ class PluginImpl(Plugin):
                 evidence={
                     "scripts_sample": sorted(script_urls)[:40],
                     "endpoints_sample": sorted(endpoints)[:80],
+                    "known_endpoints_sample": sorted(known_endpoints)[:80],
                     "internal_urls_sample": sorted(internal_urls)[:80],
                     "params_sample": sorted(params)[:80],
                 },
@@ -88,6 +102,7 @@ class PluginImpl(Plugin):
                     "confidence": 78,
                     "impact": 42,
                     "endpoints": sorted(endpoints),
+                    "known_endpoints": sorted(known_endpoints),
                 },
             )
         ]

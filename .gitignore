@@ -1,5 +1,9 @@
 # Environment
 .env
+config/signer.key
+config/vault.yaml
+data/sessions.yaml
+data/runtime/runbook_override.json
 .venv/
 venv/
 __pycache__/

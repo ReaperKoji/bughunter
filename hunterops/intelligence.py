@@ -26,14 +26,17 @@ def dedupe_findings(findings: list[Finding]) -> list[Finding]:
     seen: set[str] = set()
     out: list[Finding] = []
     semantic_cache: list[tuple[set[str], Finding]] = []
+    semantic_bucket: dict[tuple[str, str], list[tuple[set[str], Finding]]] = {}
     for f in findings:
         sig = finding_signature(f)
         if sig in seen:
             continue
-        # semantic near-duplicate clustering
+        # semantic near-duplicate clustering (bucketed by target+category to reduce O(n^2))
         toks = semantic_tokens(f"{f.target} {f.category} {f.title}")
+        bucket_key = (str(f.target).strip().lower(), str(f.category).strip().lower())
+        candidates = semantic_bucket.get(bucket_key, semantic_cache)
         is_near_dup = False
-        for existing_toks, existing_f in semantic_cache:
+        for existing_toks, existing_f in candidates:
             sim = jaccard(toks, existing_toks)
             if sim >= 0.82 and f.target == existing_f.target:
                 is_near_dup = True
@@ -44,6 +47,7 @@ def dedupe_findings(findings: list[Finding]) -> list[Finding]:
         f.metadata["signature"] = sig
         out.append(f)
         semantic_cache.append((toks, f))
+        semantic_bucket.setdefault(bucket_key, []).append((toks, f))
     return out
 
 

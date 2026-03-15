@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 from hunterops.http_client import request_http_async
 from hunterops.runtime_paths import resolve_path, secure_secret_file
+from hunterops.secrets import read_secret
 from hunterops.types import Finding
 
 HEADER_INJECTION_KEYS = ("User-Agent", "Referer", "X-Forwarded-For", "X-Api-Version", "From")
@@ -57,9 +58,9 @@ class OOBEngine:
         domain_env = str(self.cfg.get("callback_domain_env", "HUNTEROPS_OOB_CALLBACK_DOMAIN"))
         poll_env = str(self.cfg.get("poll_url_env", "HUNTEROPS_OOB_POLL_URL"))
         token_env = str(self.cfg.get("api_token_env", "HUNTEROPS_OOB_API_TOKEN"))
-        self.callback_domain = os.getenv(domain_env, str(self.cfg.get("callback_domain", ""))).strip()
-        self.poll_url = os.getenv(poll_env, str(self.cfg.get("poll_url", ""))).strip()
-        self.api_token = os.getenv(token_env, str(self.cfg.get("api_token", ""))).strip()
+        self.callback_domain = read_secret(domain_env) or str(self.cfg.get("callback_domain", "")).strip()
+        self.poll_url = read_secret(poll_env) or str(self.cfg.get("poll_url", "")).strip()
+        self.api_token = read_secret(token_env) or str(self.cfg.get("api_token", "")).strip()
         self.interactsh_client_bin = self._resolve_binary(str(self.cfg.get("interactsh_binary", "interactsh-client")))
         if self.enabled and not self.interactsh_client_bin and self.logger is not None:
             try:

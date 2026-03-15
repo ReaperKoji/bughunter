@@ -283,6 +283,61 @@ class ResearchPipelineTests(unittest.TestCase):
         self.assertEqual(len(fake_router.calls), 1)
         self.assertTrue(fake_router.calls[0].startswith("business_logic_sniper:r1:unit"))
 
+    def test_alert_router_requires_actionable_when_enabled(self) -> None:
+        mod = load_module()
+
+        class _FakeAlertRouter:
+            def __init__(self) -> None:
+                self.available = True
+                self.calls: list[str] = []
+
+            async def send_finding(self, finding: object, run_id: str, source: str) -> bool:
+                self.calls.append(f"{getattr(finding, 'plugin', '')}:{getattr(finding, 'title', '')}:{run_id}:{source}")
+                return True
+
+        fake_router = _FakeAlertRouter()
+        logger = type("L", (), {"error": lambda self, msg: None})()
+        batch = [
+            mod.Finding(
+                plugin="surface_massive",
+                target="api.example.com",
+                category="generic_discovery",
+                severity="medium",
+                title="not-actionable",
+                evidence={"endpoint": "/api/private"},
+                metadata={"confidence_score": 75.0, "impact": 10.0},
+            ),
+            mod.Finding(
+                plugin="deep_js_intelligence",
+                target="api.example.com",
+                category="information_disclosure",
+                severity="low",
+                title="fastlane-actionable",
+                evidence={"endpoint": "/"},
+                metadata={"confidence_score": 58.0, "impact": 12.0},
+            ),
+        ]
+        asyncio.run(
+            mod._route_alerts_from_batch(
+                alert_router=fake_router,
+                batch=batch,
+                run_id="r2",
+                logger=logger,
+                source="unit",
+                triage_cfg={
+                    "alert_min_severity": "low",
+                    "alert_min_confidence": 55,
+                    "alert_require_actionable": True,
+                    "actionable_min_severity": "low",
+                    "actionable_min_confidence": 55,
+                    "actionable_min_impact": 35,
+                    "fastlane_low_medium": True,
+                },
+            )
+        )
+        self.assertEqual(len(fake_router.calls), 1)
+        self.assertIn("fastlane-actionable", fake_router.calls[0])
+
     def test_alert_dry_run_sends_critical_and_research_signals(self) -> None:
         mod = load_module()
 
@@ -348,6 +403,157 @@ class ResearchPipelineTests(unittest.TestCase):
         self.assertEqual(len(review), 1)
         self.assertEqual(actionable[0].plugin, "differential_auth_prover")
         self.assertEqual(review[0].plugin, "vulnerability_correlation_engine")
+
+    def test_split_findings_for_triage_filters_low_quality_js_leak(self) -> None:
+        mod = load_module()
+        findings = [
+            mod.Finding(
+                plugin="deep_js_intelligence",
+                target="capital.com",
+                category="js_information_leak",
+                severity="low",
+                title="Deep JS intelligence found 20 low/medium leak signals across 0 endpoints",
+                evidence={"endpoints": [], "request_response_sample": []},
+                metadata={"confidence_score": 84.0, "impact": 58.0},
+            )
+        ]
+        actionable, review = mod.split_findings_for_triage(
+            findings,
+            triage_cfg={
+                "actionable_min_severity": "low",
+                "actionable_min_confidence": 55,
+                "actionable_min_impact": 35,
+                "fastlane_low_medium": True,
+            },
+        )
+        self.assertEqual(len(actionable), 0)
+        self.assertEqual(len(review), 1)
+
+    def test_shannon_validation_stage_promotes_review_candidate(self) -> None:
+        mod = load_module()
+
+        class _FakeStorage:
+            def upsert_triage_queue_rows(self, *, run_id: str, rows: list[dict], status: str = "review") -> int:
+                return len(rows)
+
+            def list_triage_review_candidates(
+                self,
+                *,
+                run_id: str,
+                min_confidence: float,
+                min_impact: float,
+                min_severity: str,
+                limit: int,
+            ) -> list[dict]:
+                return [
+                    {
+                        "finding_key": "k1",
+                        "target": "api.example.com",
+                        "endpoint": "/api/users/1",
+                        "severity": "medium",
+                        "confidence_score": 78.0,
+                        "impact_score": 72.0,
+                        "payload": {
+                            "plugin": "parameter_intelligence",
+                            "target": "api.example.com",
+                            "category": "idor_logic_signal",
+                            "severity": "medium",
+                            "title": "candidate",
+                            "risk_score": 66.0,
+                            "metadata": {"confidence_score": 78.0, "impact": 72.0},
+                            "evidence": {"endpoint": "/api/users/1"},
+                        },
+                    }
+                ]
+
+            def promote_triage_candidate_with_validation(
+                self,
+                *,
+                run_id: str,
+                finding_key: str,
+                confidence_delta: float,
+                evidence_path: str,
+                validator_note: str = "",
+            ) -> bool:
+                return True
+
+            def mark_triage_candidate_validation_failed(self, *, run_id: str, finding_key: str, note: str) -> None:
+                return None
+
+        class _FakeAdapter:
+            def __init__(self, *, binary_path: str, timeout_seconds: float = 30.0) -> None:
+                self.binary_path = binary_path
+                self.timeout_seconds = timeout_seconds
+
+            async def validate(self, context: dict) -> object:
+                return mod.ShannonResult(
+                    validated=True,
+                    confidence_delta=6.0,
+                    evidence_path="/tmp/validated.md",
+                    error=None,
+                    exit_code=0,
+                )
+
+        cfg = {
+            "modules": {
+                "shannon_validator": {
+                    "enabled": True,
+                    "binary_path": "/opt/shannon_ref/shannon",
+                    "timeout_seconds": 10,
+                    "max_candidates_per_run": 2,
+                    "thresholds": {
+                        "min_confidence": 75,
+                        "min_impact": 70,
+                        "min_severity": "medium",
+                    },
+                }
+            }
+        }
+        logger = type(
+            "L",
+            (),
+            {
+                "info": lambda self, msg: None,
+                "warning": lambda self, msg: None,
+                "error": lambda self, msg: None,
+            },
+        )()
+        actionable_rows: list[dict] = []
+        review_rows: list[dict] = [
+            {
+                "plugin": "parameter_intelligence",
+                "target": "api.example.com",
+                "category": "idor_logic_signal",
+                "severity": "medium",
+                "title": "candidate",
+                "risk_score": 66.0,
+                "metadata": {"confidence_score": 78.0, "impact": 72.0},
+                "evidence": {"endpoint": "/api/users/1"},
+            }
+        ]
+
+        prev_adapter = mod.ShannonAdapter
+        try:
+            mod.ShannonAdapter = _FakeAdapter  # type: ignore[assignment]
+            with tempfile.TemporaryDirectory() as tmp:
+                out_dir = Path(tmp)
+                actionable, review, validated = asyncio.run(
+                    mod._run_shannon_validation_stage(
+                        run_id="run-1",
+                        cfg=cfg,
+                        storage=_FakeStorage(),  # type: ignore[arg-type]
+                        logger=logger,
+                        out_dir=out_dir,
+                        actionable_rows=actionable_rows,
+                        review_rows=review_rows,
+                    )
+                )
+                self.assertEqual(len(actionable), 1)
+                self.assertEqual(len(review), 0)
+                self.assertEqual(len(validated), 1)
+                self.assertTrue((out_dir / "triage" / "validated_candidates.json").exists())
+        finally:
+            mod.ShannonAdapter = prev_adapter  # type: ignore[assignment]
 
 
 if __name__ == "__main__":

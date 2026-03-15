@@ -1,0 +1,35 @@
+programs:
+  - name: example-intigriti
+    platform: intigriti
+    kyc_required: false
+    required_headers:
+      X-Intigriti-Username: "${HUNTEROPS_BUG_BOUNTY_USERNAME}"
+    in_scope:
+      - "example.com"
+      - "*.example.com"
+    out_of_scope:
+      - "admin.example.com"
+    per_host_rpm: 60
+    per_target_rpm: 30
+    concurrency_per_host: 2
+    allowed_modules: [idor, sqli, xss, ssti, lfi]
+    blocked_paths:
+      - "/checkout"
+      - "/payment"
+    notes: "Example Intigriti program config"
+
+  - name: example-hackerone
+    platform: hackerone
+    kyc_required: false
+    in_scope:
+      - "api.example.org"
+    out_of_scope: []
+    per_host_rpm: 60
+    per_target_rpm: 30
+    concurrency_per_host: 2
+    allowed_modules: [idor, sqli, xss]
+    notes: "Example HackerOne program config"
+
+report_templates:
+  platform: intigriti
+  templates_path: config/report_templates.yaml

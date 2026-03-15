@@ -1,0 +1,16 @@
+[Unit]
+Description=HunterOps Workers
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/hunterops
+EnvironmentFile=/opt/hunterops/.env
+ExecStart=/usr/bin/docker compose -f /opt/hunterops/ops/docker-compose.attack.yml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f /opt/hunterops/ops/docker-compose.attack.yml down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

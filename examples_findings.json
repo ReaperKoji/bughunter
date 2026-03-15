@@ -1,0 +1,81 @@
+[
+  {
+    "id": "fnd-20260311-001",
+    "program_id": "example_program",
+    "target": "https://app.example.com",
+    "path": "/profile",
+    "method": "GET",
+    "severity": "P4",
+    "signatures": ["missing_security_header", "x-frame-options"],
+    "evidence": [
+      {
+        "type": "header",
+        "summary": "Missing X-Frame-Options header on authenticated profile page",
+        "sanitized_snippet": "HTTP/1.1 200 OK\ncontent-type: text/html; charset=utf-8"
+      }
+    ],
+    "confidence_score": 62,
+    "remediation_hint": "Add X-Frame-Options or CSP frame-ancestors to prevent clickjacking.",
+    "timestamp": "2026-03-11T12:00:00Z",
+    "proof_template": {
+      "curl": "curl -i -H \"Authorization: Bearer [REDACTED]\" \"https://app.example.com/profile\"",
+      "notes": "Response headers sanitized; token redacted."
+    }
+  },
+  {
+    "id": "fnd-20260311-002",
+    "program_id": "example_program",
+    "target": "https://api.example.com",
+    "path": "/orders/12345",
+    "method": "GET",
+    "severity": "P3",
+    "signatures": ["idor_read", "auth_diff"],
+    "evidence": [
+      {
+        "type": "status",
+        "summary": "Different users receive 200 for same order id",
+        "sanitized_snippet": "user_a=200, user_b=200"
+      },
+      {
+        "type": "body",
+        "summary": "Order details visible across sessions",
+        "sanitized_snippet": "{ \"order_id\": \"12345\", \"email\": \"[REDACTED]\", \"total\": \"[REDACTED]\" }"
+      }
+    ],
+    "confidence_score": 78,
+    "remediation_hint": "Enforce object-level authorization checks on /orders/{id}.",
+    "timestamp": "2026-03-11T12:05:00Z",
+    "proof_template": {
+      "curl": "curl -i -H \"Authorization: Bearer [REDACTED_USER_B]\" \"https://api.example.com/orders/12345\"",
+      "notes": "Redacted tokens; safe read-only request."
+    }
+  },
+  {
+    "id": "fnd-20260311-003",
+    "program_id": "example_program",
+    "target": "https://api.example.com",
+    "path": "/admin/export",
+    "method": "POST",
+    "severity": "P2",
+    "signatures": ["access_control_gap", "role_escalation_indicator"],
+    "evidence": [
+      {
+        "type": "status",
+        "summary": "Non-admin session receives 200 on admin export endpoint",
+        "sanitized_snippet": "HTTP/1.1 200 OK"
+      },
+      {
+        "type": "body",
+        "summary": "Export metadata returned to non-admin",
+        "sanitized_snippet": "{ \"export_id\": \"[REDACTED]\", \"status\": \"ready\" }"
+      }
+    ],
+    "confidence_score": 85,
+    "remediation_hint": "Restrict /admin/export to admin role; verify server-side authorization.",
+    "timestamp": "2026-03-11T12:10:00Z",
+    "proof_template": {
+      "curl": "curl -i -H \"Authorization: Bearer [REDACTED_USER]\" -H \"Content-Type: application/json\" -d '{\"format\":\"csv\"}' \"https://api.example.com/admin/export\"",
+      "notes": "Payload is non-destructive; tokens redacted."
+    }
+  }
+]

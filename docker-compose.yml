@@ -77,9 +77,14 @@ services:
       - hunterops-reports:/opt/hunterops/reports
     command:
       [
-        "bash",
-        "-lc",
-        "while true; do python scripts/research_pipeline.py --config config/engine.yaml --targets-file $${TARGETS_FILE:-data/targets/in_scope_hosts.txt} --out-dir /opt/hunterops/reports/research; sleep $${RUN_INTERVAL_SECONDS:-300}; done"
+        "python",
+        "scripts/run_scheduler.py",
+        "--config",
+        "config/engine.yaml",
+        "--targets-file",
+        "${TARGETS_FILE:-data/targets/in_scope_hosts.txt}",
+        "--out-dir",
+        "/opt/hunterops/reports/research"
       ]
     healthcheck:
       test: ["CMD-SHELL", "python scripts/monitor_status.py --health-check --quiet"]

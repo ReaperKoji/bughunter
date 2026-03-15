@@ -1,0 +1,54 @@
+platforms:
+  intigriti:
+    required_headers:
+      - "X-Intigriti-Username: {{username}}"
+    markdown: |
+      # Vulnerability Report (Intigriti)
+
+      Program: {{program}}
+      Target: {{target}}
+      Generated: {{generated_at}}
+
+      Required Headers:
+      {{required_headers}}
+
+      {{items_md}}
+    html: |
+      <!doctype html><html><head><meta charset="utf-8"><title>Security Report</title>
+      <style>
+      body{font-family:Arial;background:#0b0f14;color:#e6edf3;padding:24px}
+      h1,h2{color:#e2e8f0}
+      pre{background:#111827;padding:12px;border-radius:6px;overflow:auto}
+      </style></head><body>
+      <h1>Vulnerability Report (Intigriti)</h1>
+      <p>Program: {{program}}</p>
+      <p>Target: {{target}}</p>
+      <p>Generated: {{generated_at}}</p>
+      <p>Required Headers: {{required_headers_html}}</p>
+      {{items_html}}
+      </body></html>
+  hackerone:
+    required_headers: []
+    markdown: |
+      # Vulnerability Report (HackerOne)
+
+      Program: {{program}}
+      Target: {{target}}
+      Generated: {{generated_at}}
+
+      {{items_md}}
+    html: |
+      <!doctype html><html><head><meta charset="utf-8"><title>Security Report</title>
+      <style>
+      body{font-family:Arial;background:#0b0f14;color:#e6edf3;padding:24px}
+      h1,h2{color:#e2e8f0}
+      pre{background:#111827;padding:12px;border-radius:6px;overflow:auto}
+      </style></head><body>
+      <h1>Vulnerability Report (HackerOne)</h1>
+      <p>Program: {{program}}</p>
+      <p>Target: {{target}}</p>
+      <p>Generated: {{generated_at}}</p>
+      {{items_html}}
+      </body></html>
+  generic:
+    required_headers: []

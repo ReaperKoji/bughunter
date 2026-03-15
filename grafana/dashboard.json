@@ -1,0 +1,46 @@
+{
+  "title": "HunterOps Pipeline",
+  "timezone": "browser",
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Requests (rps)",
+      "targets": [
+        {"expr": "sum(rate(app_requests_total[5m]))", "legendFormat": "rps"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "403/429 rate",
+      "targets": [
+        {"expr": "sum(rate(app_responses_403_total[5m]))", "legendFormat": "403"},
+        {"expr": "sum(rate(app_responses_429_total[5m]))", "legendFormat": "429"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Scan Latency p95",
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum(rate(app_scan_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95"}
+      ]
+    },
+    {
+      "type": "gauge",
+      "title": "False Positive Estimate",
+      "targets": [
+        {"expr": "app_false_positive_estimate", "legendFormat": "fp"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Pipeline Runs",
+      "targets": [
+        {"expr": "rate(app_pipeline_runs_total[5m])", "legendFormat": "runs"},
+        {"expr": "rate(app_pipeline_failures_total[5m])", "legendFormat": "fails"}
+      ]
+    }
+  ]
+}

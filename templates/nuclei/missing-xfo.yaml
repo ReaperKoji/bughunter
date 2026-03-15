@@ -1,0 +1,27 @@
+id: http-missing-x-frame-options
+
+info:
+  name: Missing X-Frame-Options Header
+  author: hunterops
+  severity: info
+  description: Checks if response lacks the X-Frame-Options header.
+  tags: headers,misconfig,owasp-a05
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+          - 204
+          - 301
+          - 302
+          - 403
+      - type: word
+        part: header
+        words:
+          - "x-frame-options"
+        negative: true

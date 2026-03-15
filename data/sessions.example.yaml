@@ -1,0 +1,13 @@
+# Example sessions cache (do not store real secrets in repo)
+# Each entry references encrypted secrets stored in vault.yaml
+sessions:
+  - program_id: capital-com
+    auth_type: session_cookie
+    token_enc_reference: vault:capital-com/session_cookie
+    expires_at: "2026-12-31T23:59:59Z"
+    notes: "Use SessionGuardian to refresh when 401/403 is detected"
+  - program_id: admissions-for-students
+    auth_type: jwt
+    token_enc_reference: vault:admissions/jwt_primary
+    expires_at: "2026-12-31T23:59:59Z"
+    notes: "Fallback account is configured in vault"

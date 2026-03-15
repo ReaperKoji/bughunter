@@ -1,0 +1,301 @@
+version: 1
+pipeline:
+  name: bug-bounty-attack
+  description: Cadeia sequencial de modulos com fallback e validacao de PoC
+  real_mode: true
+
+  globals:
+    timeouts:
+      connect_s: 5
+      read_s: 15
+      total_s: 30
+      tool_s: 60
+    http_limits:
+      rate_per_sec: 10
+      max_inflight: 10
+    retry:
+      max_attempts: 2
+      backoff_base_s: 2
+      backoff_max_s: 30
+      jitter: 0.2
+    circuit_breaker:
+      failure_threshold: 5
+      half_open_after_s: 300
+    politeness:
+      per_host_rpm: 60
+      per_target_rpm: 30
+      concurrency_per_host: 2
+      jitter_ms: [200, 800]
+      stealth_mode: true
+      user_agents:
+        - Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36
+        - Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/121 Safari/537.36
+      proxy_pool_ref: redis://proxy-pool:6379/0
+    validator:
+      heuristics:
+        require_two_signals: true
+        min_confidence: 0.70
+        min_body_diff_ratio: 0.20
+        max_body_diff_ratio: 0.90
+        min_json_key_diff_ratio: 0.20
+        min_sensitivity_score: 0.55
+        baseline_score_threshold: 0.45
+      llm:
+        provider_order: [ollama, llamacpp, openai]
+        timeout_s: 20
+        max_tokens: 512
+        require_rationale: true
+      replay:
+        attempts: 1
+        require_signal_match: true
+    baseline:
+      enabled: true
+      timeout_s: 20
+      methods:
+        - method: GET
+        - method: POST
+          body: {"ping": "1"}
+        - method: PUT
+          body: {"ping": "1"}
+
+  policy_defaults:
+    per_host_rpm: 60
+    per_target_rpm: 30
+    concurrency_per_host: 2
+    allowed_hours: ["00:00-23:59"]
+    timezone: "UTC"
+    blocked_paths: ["/checkout", "/payment", "/kyc", "/billing"]
+    allowed_modules: []
+    blocked_modules: []
+
+  governance:
+    allowed_modules: []
+    blocked_modules: ["brute_force", "dos", "social_engineering"]
+
+  go_no_go:
+    require_signed_scope: true
+    allow_env_targets: true
+    require_roe: true
+    require_authorized_by: true
+    require_sessions_if_auth: true
+    report_path: reports/go_no_go.json
+    report_md_path: reports/go_no_go.md
+
+  runbook:
+    enabled: true
+    override_path: data/runtime/runbook_override.json
+    auto_pause_fp_rate: 0.6
+    auto_pause_error_rate: 0.3
+    auto_reduce_rate_error_rate: 0.2
+    reduce_rate_multiplier: 0.5
+    pause_minutes: 15
+    reduce_rate_minutes: 20
+    auto_blacklist_403_429_threshold: 5
+    blacklist_minutes: 15
+
+  endpoint_policies:
+    default:
+      block:
+        - prefix: "/checkout"
+        - prefix: "/payment"
+        - prefix: "/kyc"
+        - prefix: "/billing"
+      allow:
+        - prefix: "/health"
+    programs:
+      capital-com:
+        block:
+          - prefix: "/admin"
+            methods: ["POST", "PUT", "DELETE"]
+
+  storage:
+    enabled: true
+    dsn_env: HUNTEROPS_POSTGRES_DSN
+
+  alerting:
+    enabled: true
+    timeout_seconds: 5
+
+  metrics:
+    enabled: true
+    port: 9108
+    throughput_baseline_tph: 60
+    fp_alert_threshold: 0.4
+    error_alert_threshold: 0.2
+
+  target_sources:
+    - type: file
+      path: data/targets/in_scope_hosts.txt
+    - type: file
+      path: data/processed/attack_chain_discovered.txt
+
+  chain:
+    order: [idor, bac_advanced, sensitive_misconfig, sqli, ssti, xss, lfi, ssrf_safe_probe, info_leak, open_redirect, rce]
+    strategy: adaptive
+    rotate: true
+    rotate_on: run+target
+    adaptive_min_score: 0.2
+    max_modules_per_target: 4
+    shuffle_ties: true
+    fallback_on: [no_poc, false_positive, inconclusive, timeout]
+    emit_poc_on: [poc_valid]
+
+  owasp:
+    relevant: [A01:2021, A02:2021, A03:2021, A04:2021, A05:2021, A06:2021, A07:2021, A08:2021, A09:2021, A10:2021]
+
+  modules:
+    idor:
+      enabled: true
+      module: idor
+      timeout_s: 20
+      retries: 1
+      owasp: [A01:2021]
+      rate_limit_override_rpm: 30
+      safe_payloads_only: true
+      baseline_samples: 2
+
+    sqli:
+      enabled: true
+      module: sqli
+      timeout_s: 30
+      retries: 1
+      owasp: [A03:2021]
+      rate_limit_override_rpm: 20
+      safe_payloads_only: true
+      baseline_samples: 2
+
+    ssti:
+      enabled: true
+      module: ssti
+      timeout_s: 25
+      retries: 1
+      owasp: [A03:2021]
+      safe_payloads_only: true
+      baseline_samples: 2
+
+    xss:
+      enabled: true
+      module: xss
+      timeout_s: 20
+      retries: 1
+      owasp: [A03:2021]
+      safe_payloads_only: true
+      baseline_samples: 2
+
+    lfi:
+      enabled: true
+      module: lfi
+      timeout_s: 20
+      retries: 1
+      owasp: [A03:2021]
+      safe_payloads_only: true
+      baseline_samples: 2
+
+    rce:
+      enabled: true
+      module: rce
+      timeout_s: 20
+      retries: 0
+      owasp: [A03:2021]
+      safe_payloads_only: true
+      notes: "RCE somente com probes nao destrutivos e sem execucao arbitraria."
+      baseline_samples: 2
+
+    open_redirect:
+      enabled: false
+      module: open_redirect
+      timeout_s: 15
+      retries: 0
+      owasp: [A01:2021]
+      safe_payloads_only: true
+
+    sensitive_misconfig:
+      enabled: true
+      module: sensitive_misconfig
+      timeout_s: 15
+      retries: 0
+      owasp: [A05:2021]
+      safe_payloads_only: true
+      max_checks: 4
+      paths:
+        - "/.git/config"
+        - "/.env"
+        - "/.env.local"
+        - "/app.js.map"
+        - "/main.js.map"
+
+    ssrf_safe_probe:
+      enabled: false
+      module: ssrf_safe_probe
+      timeout_s: 15
+      retries: 0
+      owasp: [A10:2021]
+      safe_payloads_only: true
+      payloads:
+        - "http://169.254.169.254/latest/meta-data/"
+      baseline_samples: 2
+
+    bac_advanced:
+      enabled: true
+      module: bac_advanced
+      timeout_s: 15
+      retries: 0
+      owasp: [A01:2021]
+      safe_payloads_only: true
+      requires_auth: true
+      auth_session: "user"
+      max_checks: 3
+      paths:
+        - "/admin"
+        - "/internal"
+        - "/staff"
+
+    info_leak:
+      enabled: false
+      module: info_leak
+      timeout_s: 15
+      retries: 0
+      owasp: [A02:2021]
+      safe_payloads_only: true
+
+  outputs:
+    events_path: data/events/events.ndjson
+    evidence_path: data/evidence/
+    reports_path: reports/
+    metrics_path: data/metrics/
+
+  hot_reload:
+    nuclei_templates_path: data/nuclei-templates/
+    wordlists_path: data/wordlists/
+    poll_interval_s: 300
+
+  session_guardian:
+    enabled: true
+    headless: true
+    sessions_file: data/sessions.yaml
+    vault_file: config/vault.yaml
+    heartbeat_paths: ["/"]
+    unauthorized_statuses: [401, 403]
+    session_names: ["user", "user_b"]
+    check_interval_seconds: 300
+    auth_max_attempts: 3
+    auth_backoff_base_s: 2
+    auth_backoff_max_s: 30
+    auth_lockout_window_s: 600
+    failover_accounts: ["user_b"]
+
+  impact_validator:
+    enabled: true
+    modules: ["idor", "bac_advanced", "ssrf_safe_probe", "sensitive_misconfig"]
+    require_auth_session: false
+    auth_status: [200, 201]
+    anon_status: [200, 201]
+    max_body_diff_ratio: 0.25
+    sensitive_markers:
+      - email
+      - account
+      - balance
+      - wallet
+      - transaction
+      - order
+      - portfolio

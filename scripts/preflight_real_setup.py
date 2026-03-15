@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 from typing import Any
 
 import yaml
 from hunterops.env_utils import resolve_binary
 from hunterops.runtime_paths import resolve_path
+from hunterops.secrets import read_secret
 
 REQUIRED_ENV = [
     "HUNTEROPS_USER_TOKEN",
@@ -101,7 +101,7 @@ def main() -> None:
     if len(sessions) < 2:
         warnings.append("Less than 2 sessions configured; multi-account coverage is weak")
 
-    missing_env = [k for k in REQUIRED_ENV if not os.getenv(k, "").strip()]
+    missing_env = [k for k in REQUIRED_ENV if not read_secret(k)]
     if missing_env:
         issues.append(f"Missing required env vars: {', '.join(missing_env)}")
 

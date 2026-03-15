@@ -1,0 +1,22 @@
+[Unit]
+Description=HunterOps Nuclei Template Curation (Weekly)
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=hunterops_user
+Group=hunterops_user
+WorkingDirectory=/opt/hunterops
+EnvironmentFile=/opt/hunterops/.env
+ExecStart=/bin/bash -lc '/usr/bin/docker compose -f /opt/hunterops/docker-compose.yml exec -T app python scripts/nuclei_curation.py --signals data/findings/nuclei_signals.jsonl --curation config/nuclei-curation.yaml --out data/reports/nuclei_curation.json && /usr/bin/docker compose -f /opt/hunterops/docker-compose.yml exec -T app python scripts/nuclei_curation_apply.py --curation-json data/reports/nuclei_curation.json --templates-root templates/nuclei --out-dir templates/nuclei-curated --bootstrap-tags'
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/hunterops
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

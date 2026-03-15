@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import time
 from pathlib import Path
@@ -12,6 +11,8 @@ from urllib.parse import urlparse
 import httpx
 
 from hunterops.findings import calculate_impact
+from hunterops.runtime_paths import ensure_directory, resolve_path
+from hunterops.secrets import read_secret
 from hunterops.slack_formatter import build_critical_log_blocks, build_finding_blocks
 from hunterops.types import Finding
 
@@ -64,6 +65,25 @@ class AlertRouter:
         self.enabled = bool(settings.get("enabled", True))
         self.timeout_seconds = float(settings.get("timeout_seconds", 5.0))
         self.dedupe_ttl_seconds = max(10.0, float(settings.get("dedupe_ttl_seconds", 1800.0)))
+        self.dedupe_persist_ttl_seconds = max(60.0, float(settings.get("dedupe_persist_ttl_seconds", 86400.0)))
+        self.dedupe_persist_max_entries = max(1000, int(settings.get("dedupe_persist_max_entries", 20000)))
+        self.dedupe_persist_flush_seconds = max(5.0, float(settings.get("dedupe_persist_flush_seconds", 30.0)))
+        self.dedupe_persist_file = resolve_path(
+            str(settings.get("dedupe_persist_file", "data/processed/alert_dedupe.json")),
+            prefer_existing=False,
+        )
+        self.cooldown_seconds = max(0.0, float(settings.get("cooldown_seconds", 0.0) or 0.0))
+        self.cooldown_scope = str(settings.get("cooldown_scope", "target")).strip().lower() or "target"
+        self.cooldown_bypass_severities = {
+            str(x).strip().lower()
+            for x in settings.get("cooldown_bypass_severities", ["critical"]) or []
+            if str(x).strip()
+        }
+        self.cooldown_category_allowlist = {
+            str(x).strip().lower()
+            for x in settings.get("cooldown_category_allowlist", []) or []
+            if str(x).strip()
+        }
         self.max_embed_poc_chars = max(200, int(settings.get("max_embed_poc_chars", 1100)))
         self.discord_attach_threshold = max(800, int(settings.get("discord_attach_threshold", 1200)))
         self.discord_max_attachment_bytes = max(1024, int(settings.get("discord_max_attachment_bytes", 7_000_000)))
@@ -90,6 +110,12 @@ class AlertRouter:
         self._client: httpx.AsyncClient | None = None
         self._dedupe: dict[str, float] = {}
         self._dedupe_lock = asyncio.Lock()
+        self._persisted: dict[str, float] = {}
+        self._persist_dirty = False
+        self._persist_last_flush = 0.0
+        self._load_persisted()
+        self._cooldown: dict[str, float] = {}
+        self._cooldown_lock = asyncio.Lock()
 
     @property
     def available(self) -> bool:
@@ -107,11 +133,11 @@ class AlertRouter:
         if explicit:
             return explicit
         if env_name:
-            value = str(os.getenv(env_name, "")).strip()
+            value = read_secret(env_name)
             if value:
                 return value
         for item in fallback_env:
-            value = str(os.getenv(item, "")).strip()
+            value = read_secret(item)
             if value:
                 return value
         return ""
@@ -159,6 +185,16 @@ class AlertRouter:
         metadata = finding.metadata if isinstance(finding.metadata, dict) else {}
         evidence = finding.evidence if isinstance(finding.evidence, dict) else {}
         return _safe_float(metadata.get("confidence_score", metadata.get("confidence", evidence.get("confidence_score", 0))), 0.0)
+
+    @staticmethod
+    def _dedupe_endpoint_key(endpoint: str, category: str) -> str:
+        raw_endpoint = str(endpoint or "").strip() or "/"
+        cat = str(category or "").strip().lower()
+        if cat in {"critical_public_data_exposure", "confirmed_idor_bac"}:
+            parsed = urlparse(raw_endpoint)
+            path = parsed.path or "/"
+            return path if path.startswith("/") else f"/{path}"
+        return raw_endpoint
 
     @staticmethod
     def _channel_partition(*, severity: str, impact_score: float) -> str:
@@ -253,7 +289,7 @@ class AlertRouter:
         return "curl -i \"https://<target>/path\""
 
     async def _is_duplicate(self, key: str) -> bool:
-        now = time.monotonic()
+        now = time.time()
         async with self._dedupe_lock:
             for item, stamp in list(self._dedupe.items()):
                 if now - float(stamp) > self.dedupe_ttl_seconds:
@@ -262,6 +298,93 @@ class AlertRouter:
             if previous is not None and (now - float(previous)) <= self.dedupe_ttl_seconds:
                 return True
             self._dedupe[key] = now
+            return False
+
+    def _load_persisted(self) -> None:
+        if not self.dedupe_persist_file or self.dedupe_persist_ttl_seconds <= 0:
+            return
+        path = Path(self.dedupe_persist_file)
+        if not path.exists():
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(raw, dict):
+            return
+        now = time.time()
+        for key, stamp in raw.items():
+            try:
+                ts = float(stamp)
+            except Exception:
+                continue
+            if now - ts <= self.dedupe_persist_ttl_seconds:
+                self._persisted[str(key)] = ts
+        self._prune_persisted(now)
+
+    def _prune_persisted(self, now: float) -> None:
+        if not self._persisted:
+            return
+        ttl = self.dedupe_persist_ttl_seconds
+        for key, stamp in list(self._persisted.items()):
+            if now - float(stamp) > ttl:
+                self._persisted.pop(key, None)
+        if len(self._persisted) > self.dedupe_persist_max_entries:
+            items = sorted(self._persisted.items(), key=lambda row: row[1])
+            for key, _ in items[: max(0, len(items) - self.dedupe_persist_max_entries)]:
+                self._persisted.pop(key, None)
+
+    def _flush_persisted(self, now: float) -> None:
+        if not self._persist_dirty:
+            return
+        if not self.dedupe_persist_file:
+            return
+        try:
+            ensure_directory(Path(self.dedupe_persist_file).parent, mode=0o755)
+            payload = json.dumps(self._persisted, ensure_ascii=True, indent=2)
+            Path(self.dedupe_persist_file).write_text(payload + "\n", encoding="utf-8")
+            self._persist_last_flush = now
+            self._persist_dirty = False
+        except Exception:
+            return
+
+    async def _is_duplicate_persistent(self, key: str) -> bool:
+        if not self.dedupe_persist_file or self.dedupe_persist_ttl_seconds <= 0:
+            return False
+
+    async def _cooldown_allows(self, *, target: str, category: str, severity: str, program: str = "") -> bool:
+        if self.cooldown_seconds <= 0:
+            return True
+        if str(severity).lower() in self.cooldown_bypass_severities:
+            return True
+        if self.cooldown_category_allowlist and str(category).lower() not in self.cooldown_category_allowlist:
+            return True
+        scope = self.cooldown_scope
+        if scope == "target_category":
+            key = f"{target}|{category}"
+        elif scope == "target_severity":
+            key = f"{target}|{severity}"
+        elif scope == "program":
+            key = f"program|{program or target}"
+        else:
+            key = str(target)
+        now = time.time()
+        async with self._cooldown_lock:
+            last = self._cooldown.get(key)
+            if last is not None and (now - float(last)) < self.cooldown_seconds:
+                return False
+            self._cooldown[key] = now
+            return True
+        now = time.time()
+        async with self._dedupe_lock:
+            self._prune_persisted(now)
+            previous = self._persisted.get(key)
+            if previous is not None and (now - float(previous)) <= self.dedupe_persist_ttl_seconds:
+                return True
+            self._persisted[key] = now
+            self._persist_dirty = True
+            if (now - self._persist_last_flush) >= self.dedupe_persist_flush_seconds:
+                self._flush_persisted(now)
             return False
 
     async def _post_json(self, webhook: str, payload: dict[str, Any], *, route: str) -> None:
@@ -296,8 +419,21 @@ class AlertRouter:
         impact_score = _safe_float(impact_profile.get("impact_score", 0.0))
         severity = str(impact_profile.get("adjusted_severity", finding.severity)).lower()
         method, endpoint = self._extract_endpoint(finding)
-        dedupe_key = f"{run_id}|{finding.target}|{endpoint}|{finding.category}|{severity}"
+        dedupe_endpoint = self._dedupe_endpoint_key(endpoint, finding.category)
+        dedupe_key = f"{run_id}|{finding.target}|{dedupe_endpoint}|{finding.category}|{severity}"
         if await self._is_duplicate(dedupe_key):
+            return False
+        meta = finding.metadata if isinstance(finding.metadata, dict) else {}
+        program = str(meta.get("program", meta.get("program_name", ""))).strip()
+        if not await self._cooldown_allows(
+            target=finding.target,
+            category=str(finding.category or ""),
+            severity=severity,
+            program=program,
+        ):
+            return False
+        persistent_key = f"{finding.target}|{dedupe_endpoint}|{finding.category}|{severity}|{finding.title}"
+        if await self._is_duplicate_persistent(persistent_key):
             return False
 
         confidence = self._extract_confidence(finding)
@@ -410,10 +546,13 @@ class AlertRouter:
         loop.create_task(self.send_critical_log(message=message, run_id=run_id))
 
     async def close(self) -> None:
+        try:
+            self._flush_persisted(time.time())
+        except Exception:
+            pass
         if self._client is not None:
             try:
                 await self._client.aclose()
             except Exception:
                 pass
             self._client = None
-

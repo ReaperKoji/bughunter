@@ -109,7 +109,16 @@ def _extract_endpoint(evidence: dict[str, Any]) -> str:
             if raw.startswith("http://") or raw.startswith("https://"):
                 return urlparse(raw).path or "/"
             return raw if raw.startswith("/") else f"/{raw}"
-    return "/"
+    endpoints = evidence.get("endpoints", [])
+    if isinstance(endpoints, list):
+        for item in endpoints:
+            raw = str(item or "").strip()
+            if not raw:
+                continue
+            if raw.startswith("http://") or raw.startswith("https://"):
+                return urlparse(raw).path or "/"
+            return raw if raw.startswith("/") else f"/{raw}"
+    return "/unknown"
 
 
 def _cwe_for_finding(category: str, title: str) -> tuple[str, str]:
@@ -132,6 +141,8 @@ class ExploitDocGenerator:
     def curl_from_request(request_data: dict[str, Any]) -> str:
         method = str(request_data.get("method", "GET")).upper()
         url = str(request_data.get("url", ""))
+        if not url.strip():
+            return ""
         headers = request_data.get("headers", {}) if isinstance(request_data.get("headers"), dict) else {}
         masked_headers = _mask_headers(headers)
         command = f"curl -i -X {method} \"{url}\""
@@ -300,6 +311,18 @@ class PluginImpl(Plugin):
         if not run_id:
             return []
         threshold = float(cfg.get("confidence_threshold", 80))
+        require_replayable_requests = bool(cfg.get("require_replayable_requests", True))
+        allow_root_endpoint = bool(cfg.get("allow_root_endpoint", False))
+        excluded_categories = {
+            str(x).strip().lower()
+            for x in cfg.get("exclude_categories", [])
+            if str(x).strip()
+        }
+        excluded_source_plugins = {
+            str(x).strip().lower()
+            for x in cfg.get("exclude_source_plugins", [])
+            if str(x).strip()
+        }
         context_a = str(cfg.get("auth_context_a", "Auth_Context_A"))
         context_b = str(cfg.get("auth_context_b", "Auth_Context_B"))
         rows = await self._load_rows(task=task, context=context, run_id=run_id)
@@ -317,17 +340,26 @@ class PluginImpl(Plugin):
             if confidence <= threshold:
                 continue
             category = str(row.get("category", ""))
+            source_plugin = str(row.get("plugin", "")).strip().lower()
+            if category.lower() in excluded_categories:
+                continue
+            if source_plugin and source_plugin in excluded_source_plugins:
+                continue
             title = str(row.get("title", "Untitled finding"))
             severity = self._severity_label(row.get("severity", "medium"))
             evidence = row.get("evidence", {}) if isinstance(row.get("evidence"), dict) else {}
             evidence = await self._load_evidence_artifacts(evidence)
             endpoint = _extract_endpoint(evidence)
+            if not allow_root_endpoint and endpoint == "/":
+                continue
             parameter = str(evidence.get("tested_parameter", "")).strip()
             if not parameter:
                 parameter = str(evidence.get("parameter", "")).strip()
             cwe_id, cwe_name = _cwe_for_finding(category, title)
             leak_point = self._leak_point(row=row, evidence=evidence, context_a=context_a, context_b=context_b)
             poc = doc_gen.generate_pair(evidence)
+            if require_replayable_requests and (not str(poc.get("curl_base", "")).strip() or not str(poc.get("curl_exploit", "")).strip()):
+                continue
             impact = self._impact_text(category=category, endpoint=endpoint, parameter=parameter)
             remediation = self._remediation_text(cwe_id)
             novelty = float((row.get("metadata", {}) or {}).get("novelty", 0) or 0)

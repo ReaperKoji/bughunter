@@ -6,16 +6,18 @@ import asyncio
 import os
 import shutil
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
 import psycopg
 
+from hunterops.secrets import read_secret
 
 def _env(name: str, default: str = "") -> str:
-    return str(os.getenv(name, default)).strip()
+    value = read_secret(name, default=default)
+    return str(value).strip()
 
 
 def _build_dsn() -> str:
@@ -53,7 +55,11 @@ def _table_exists(conn: psycopg.Connection[Any], table_name: str) -> bool:
 @dataclass
 class MonitorStats:
     total_findings: int
+    new_findings: int
+    total_entities: int
     new_entities: int
+    last_finding_at: datetime | None
+    last_entity_at: datetime | None
     error_429_count: int
     disk_used_pct: float
     ram_used_pct: float
@@ -92,8 +98,19 @@ def collect_stats(*, dsn: str, window_hours: float, data_path: Path) -> MonitorS
             cur.execute(f"select count(*) from {findings_table}")
             total_findings = int((cur.fetchone() or [0])[0] or 0)
 
+            cur.execute(f"select count(*) from {findings_table} where created_at >= now() - (%s)::interval", (interval,))
+            new_findings = int((cur.fetchone() or [0])[0] or 0)
+
+            cur.execute(f"select max(created_at) from {findings_table}")
+            last_finding_at = cur.fetchone()
+            last_finding = last_finding_at[0] if last_finding_at else None
+
+            total_entities = 0
             new_entities = 0
+            last_entity = None
             if entities_exists:
+                cur.execute("select count(*) from discovered_entities")
+                total_entities = int((cur.fetchone() or [0])[0] or 0)
                 cur.execute(
                     """
                     select count(*)
@@ -103,6 +120,9 @@ def collect_stats(*, dsn: str, window_hours: float, data_path: Path) -> MonitorS
                     (interval,),
                 )
                 new_entities = int((cur.fetchone() or [0])[0] or 0)
+                cur.execute("select max(coalesce(last_seen, first_seen)) from discovered_entities")
+                last_entity_row = cur.fetchone()
+                last_entity = last_entity_row[0] if last_entity_row else None
 
             cur.execute(
                 f"""
@@ -121,21 +141,34 @@ def collect_stats(*, dsn: str, window_hours: float, data_path: Path) -> MonitorS
 
     return MonitorStats(
         total_findings=total_findings,
+        new_findings=new_findings,
+        total_entities=total_entities,
         new_entities=new_entities,
+        last_finding_at=last_finding,
+        last_entity_at=last_entity,
         error_429_count=error_429_count,
         disk_used_pct=_disk_usage_pct(data_path),
         ram_used_pct=_ram_usage_pct(),
     )
 
 
-def _format_message(stats: MonitorStats, window_hours: float) -> str:
+def _format_message(stats: MonitorStats, window_hours: float, *, deadman_triggered: bool) -> str:
     stamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    prefix = "DEADMAN ALERT | " if deadman_triggered else ""
+    latest_activity = None
+    for candidate in (stats.last_finding_at, stats.last_entity_at):
+        if candidate and (latest_activity is None or candidate > latest_activity):
+            latest_activity = candidate
+    latest_text = latest_activity.isoformat().replace("+00:00", "Z") if latest_activity else "n/a"
     return "\n".join(
         [
-            f"HunterOps Monitor | {stamp}",
+            f"{prefix}HunterOps Monitor | {stamp}",
             f"Window: last {window_hours:g}h",
             f"Total Findings: {stats.total_findings}",
+            f"New Findings: {stats.new_findings}",
             f"New Entities: {stats.new_entities}",
+            f"Total Entities: {stats.total_entities}",
+            f"Last Activity: {latest_text}",
             f"429 Error Count: {stats.error_429_count}",
             f"Disk Used: {stats.disk_used_pct:.2f}%",
             f"RAM Used: {stats.ram_used_pct:.2f}%",
@@ -182,6 +215,7 @@ async def dispatch_notifications(message: str) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="HunterOps monitoring status dispatcher")
     parser.add_argument("--interval-hours", type=float, default=float(_env("MONITOR_INTERVAL_HOURS", "6") or "6"))
+    parser.add_argument("--deadman-hours", type=float, default=float(_env("MONITOR_DEADMAN_HOURS", _env("HUNTEROPS_DEADMAN_HOURS", "0")) or "0"))
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--health-check", action="store_true")
     parser.add_argument("--quiet", action="store_true")
@@ -209,10 +243,21 @@ async def run_loop(args: argparse.Namespace) -> int:
             return 1
 
     interval_seconds = max(300, int(args.interval_hours * 3600))
+    deadman_hours = max(0.0, float(args.deadman_hours or 0))
     while True:
         try:
             stats = collect_stats(dsn=dsn, window_hours=args.interval_hours, data_path=data_path)
-            message = _format_message(stats, args.interval_hours)
+            deadman_triggered = False
+            if deadman_hours > 0:
+                latest_activity = None
+                for candidate in (stats.last_finding_at, stats.last_entity_at):
+                    if candidate and (latest_activity is None or candidate > latest_activity):
+                        latest_activity = candidate
+                if latest_activity and (stats.total_findings > 0 or stats.total_entities > 0):
+                    age = datetime.now(UTC) - latest_activity.astimezone(UTC)
+                    if age >= timedelta(hours=deadman_hours):
+                        deadman_triggered = True
+            message = _format_message(stats, args.interval_hours, deadman_triggered=deadman_triggered)
             await dispatch_notifications(message)
             if not args.quiet:
                 print(message)

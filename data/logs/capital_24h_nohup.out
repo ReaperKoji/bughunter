@@ -1,0 +1,2 @@
+capital_24h_runner_start targets=config/targets/admissions_in_scope_hosts.txt out_dir=data/reports/research/capital_24h log=data/logs/capital_24h_20260308_234957.log max_hours=24
+run_start run_id=20260308_234957_capital24h_1 iteration=1
